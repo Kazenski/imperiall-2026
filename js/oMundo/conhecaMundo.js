@@ -10,12 +10,12 @@ const mapasDoMundo = [
 
 // Lista de Mídias dos Bardos com o caminho fornecido
 const cancoesDoBardo = [
-    { id: 1, tipo: 'podcast', titulo: 'Crônicas da Gênese', src: 'audios/A Dança dos Três Continentes.mp3' },
-    { id: 2, tipo: 'musica', titulo: 'A Dança dos Três Continentes', src: 'audios/A Dança dos Três Continentes.mp3' },
-    { id: 3, tipo: 'musica', titulo: 'Taverna do Javali Caolho', src: 'audios/A Dança dos Três Continentes.mp3' },
-    { id: 4, tipo: 'musica', titulo: 'Sussurros de Gallandra', src: 'audios/A Dança dos Três Continentes.mp3' },
-    { id: 5, tipo: 'musica', titulo: 'Marcha dos Templários', src: 'audios/A Dança dos Três Continentes.mp3' },
-    { id: 6, tipo: 'musica', titulo: 'Lamento dos Dragões', src: 'audios/A Dança dos Três Continentes.mp3' }
+    { id: 1, tipo: 'musica', titulo: 'A Dança dos Três Continentes', src: 'audios/A Dança dos Três Continentes.mp3' },
+    { id: 2, tipo: 'musica', titulo: 'O Sopro dos Oito', src: 'audios/O Sopro dos Oito (A Vida e a Ordem).mp3' },
+    { id: 3, tipo: 'musica', titulo: 'A Sombra dos Quatro', src: 'audios/A Sombra dos Quatro.mp3' },
+    { id: 4, tipo: 'musica', titulo: 'O Sacrifício', src: 'audios/O Sacrifício (A Prisão de Cristal).mp3' },
+    { id: 5, tipo: 'musica', titulo: 'A Balada de Androa', src: 'audios/A Balada de Androa.mp3' },
+    { id: 6, tipo: 'podcast', titulo: 'Criação Celestial de Gallandra', src: 'audios/A_Deusa_Gallandra_Criou_a_Ganância.mp3' }
 ];
 
 export function renderConhecaMundoTab() {
@@ -107,7 +107,7 @@ export function renderConhecaMundoTab() {
                     <h2 class="text-2xl font-cinzel font-bold text-slate-200 tracking-widest"><i class="fas fa-guitar text-amber-500 mr-3"></i> Canções dos Bardos</h2>
                 </div>
 
-                <div class="relative w-full rounded-2xl overflow-hidden shadow-2xl min-h-[350px] flex items-center justify-center bg-[url('imagens/usoGeralSite/bardo-conheca-o-mundo.png')] bg-cover bg-center">
+                <div class="relative w-full rounded-2xl overflow-hidden shadow-2xl min-h-[530px] flex items-center justify-center bg-[url('imagens/usoGeralSite/bardo-conheca-o-mundo.png')] bg-cover bg-center">
                     
                     <div class="absolute inset-0 bg-slate-950/50 z-0"></div>
 
