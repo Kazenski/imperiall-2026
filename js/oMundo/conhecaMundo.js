@@ -8,7 +8,6 @@ const mapasDoMundo = [
     "imagens/mapas/mapas6.webp"
 ];
 
-
 // Lista de Mídias dos Bardos com o caminho fornecido
 const cancoesDoBardo = [
     { id: 1, tipo: 'musica', titulo: 'A Dança dos Três Continentes', src: 'audios/A Dança dos Três Continentes.mp3' },
