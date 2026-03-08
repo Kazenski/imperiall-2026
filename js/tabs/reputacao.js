@@ -346,12 +346,12 @@ function renderReputationStore(container, repStats) {
     let html = `${warning}<div class="grid grid-cols-1 lg:grid-cols-2 gap-8">`;
     
     // Predios
-    html += `<div><h3 class="font-cinzel text-amber-500 text-lg border-b border-slate-700 pb-2 mb-4">Estabelecimentos</h3><div class="grid grid-cols-1 sm:grid-cols-2 gap-4">`;
+    html += `<div><h3 class="font-cinzel text-amber-500 text-lg border-b border-slate-700 pb-2 mb-4">Estabelecimentos</h3><div class="grid grid-cols-1 sm:grid-cols-3 gap-3">`;
     globalState.cache.buildings.forEach(tpl => { html += createStoreCard(tpl, 'building', repStats, isLevelValid, isSessionValid); });
     html += `</div></div>`;
 
     // Aliados
-    html += `<div><h3 class="font-cinzel text-sky-500 text-lg border-b border-slate-700 pb-2 mb-4">Contratar Aliados</h3><div class="grid grid-cols-1 sm:grid-cols-2 gap-4">`;
+    html += `<div><h3 class="font-cinzel text-sky-500 text-lg border-b border-slate-700 pb-2 mb-4">Contratar Aliados</h3><div class="grid grid-cols-1 sm:grid-cols-3 gap-3">`;
     globalState.cache.allies.forEach(tpl => { html += createStoreCard(tpl, 'ally', repStats, isLevelValid, isSessionValid); });
     html += `</div></div></div>`;
 

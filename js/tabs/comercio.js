@@ -285,7 +285,7 @@ export function renderComercioTab(isLoading = false) {
             if(items.length === 0) {
                 html += '<p class="col-span-full text-center opacity-50 py-10">Estoque esgotado.</p>';
             } else {
-                html += `<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 content-start">`;
+                html += `<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-8 gap-2.5 content-start">`;
                 
                 items.forEach(item => {
                     if (item.estoqueAtual <= 0) return;
@@ -389,7 +389,7 @@ export function renderComercioTab(isLoading = false) {
                         <p class="text-[10px] mt-1 text-slate-500">Nota: Ele negocia <b>APENAS</b> itens do seu próprio Rank (Rank ${shopRankLetter}).</p>
                     </div>`;
             } else {
-                html += `<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 content-start">`;
+                html += `<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-8 gap-2.5 content-start">`;
                 let totalSellValue = 0;
                 
                 itemsToShow.forEach(item => {

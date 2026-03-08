@@ -46,8 +46,8 @@ export function renderMinhasHabilidades() {
                     </div>
                     
                     <div class="flex-1 overflow-y-auto custom-scroll bg-slate-900/50 border border-slate-700 rounded-xl p-4 shadow-inner relative">
-                        <div id="grid-learned" class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3 content-start"></div>
-                        <div id="grid-possible" class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3 content-start hidden"></div>
+                        <div id="grid-learned" class="grid grid-cols-4 sm:grid-cols-12 md:grid-cols-15 lg:grid-cols-15 gap-3 content-start"></div>
+                        <div id="grid-possible" class="grid grid-cols-4 sm:grid-cols-12 md:grid-cols-15 lg:grid-cols-15 gap-3 content-start hidden"></div>
                     </div>
                 </div>
 

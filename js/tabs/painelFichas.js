@@ -149,7 +149,7 @@ export async function renderFichaEditor(fichaId) {
         fichaData = fullData.ficha;
     }
 
-    const inputClass = "w-full bg-slate-900 border border-slate-700 rounded text-slate-200 px-3 py-2 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition outline-none font-medium shadow-inner";
+    const inputClass = "w-full bg-slate-900 border border-slate-700 rounded text-slate-200 px-3 py-3 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition outline-none font-medium shadow-inner text-lg text-amber-400 font-cinzel ";
 
     container.innerHTML = `
         <div class="w-full h-full flex flex-col gap-4 animate-fade-in pb-4">
@@ -157,25 +157,25 @@ export async function renderFichaEditor(fichaId) {
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-sm shrink-0 flex flex-col xl:flex-row justify-between items-center gap-4">
                 <div class="flex-grow grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-5 gap-4 items-end w-full">
                     <div class="lg:col-span-2 space-y-1">
-                        <label class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Nome do Personagem</label>
-                        <input type="text" id="editor-nome" class="${inputClass} text-lg text-amber-400 font-cinzel">
+                        <label class="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Nome do Personagem</label>
+                        <input type="text" id="editor-nome" class="${inputClass}">
                     </div>
                     <div class="space-y-1">
-                        <label class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Jogador</label>
+                        <label class="text-[9px] text-slate-400 font-bold uppercase tracking-wider mb-1">Jogador</label>
                         <input type="text" id="editor-jogador" class="${inputClass}">
                     </div>
                     <div class="space-y-1">
-                        <label class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Raça</label>
-                        <select id="editor-racaId" class="${inputClass} appearance-none cursor-pointer"></select>
+                        <label class="text-[9px] text-slate-400 font-bold uppercase tracking-wider mb-1">Raça</label>
+                        <select id="editor-racaId" class="${inputClass}"></select>
                     </div>
                     <div class="space-y-1">
-                        <label class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Classe</label>
-                        <select id="editor-classeId" class="${inputClass} appearance-none cursor-pointer"></select>
+                        <label class="text-[9px] text-slate-400 font-bold uppercase tracking-wider mb-1">Classe</label>
+                        <select id="editor-classeId" class="${inputClass}"></select>
                     </div>
                 </div>
-                <div class="flex gap-2 w-full xl:w-auto shrink-0 mt-2 xl:mt-0 justify-end">
-                    <button id="btn-voltar-painel" class="btn bg-slate-700 hover:bg-slate-600 text-white px-6 py-2 text-sm shadow">Voltar</button>
-                    <button id="btn-salvar-ficha" class="btn bg-amber-600 hover:bg-amber-500 text-black px-8 py-2 text-sm font-bold shadow-lg transform transition active:scale-95"><i class="fas fa-save mr-2"></i> Salvar</button>
+                <div class="flex gap-4 w-full xl:w-auto shrink-0 mt-2 xl:mt-0 justify-end">
+                    <button id="btn-voltar-painel" class="btn bg-red-700 hover:bg-red-500 text-white px-6 py-5 text-sm shadow">Voltar</button>
+                    <button id="btn-salvar-ficha" class="btn bg-green-600 hover:bg-green-500 text-black px-8 py-5 text-sm font-bold shadow-lg transform transition active:scale-95"><i class="fas fa-save mr-2"></i> Salvar</button>
                 </div>
             </div>
 
@@ -189,19 +189,19 @@ export async function renderFichaEditor(fichaId) {
                                 <input type="number" id="editor-experiencia" class="w-full bg-slate-900 border border-amber-900/50 rounded px-2 py-1.5 text-sm text-center font-bold text-amber-400 outline-none focus:border-amber-500">
                             </div>
                             <div class="w-2/3 mt-4">
-                                <div class="w-full relative h-6 bg-black rounded border border-slate-600 overflow-hidden shadow-inner" id="xp-bar-container">
-                                    <div id="xp-bar-fill" class="absolute top-0 left-0 h-full bg-gradient-to-r from-orange-600 to-amber-400 transition-all w-0"></div>
+                                <div class="w-full relative h-11 bg-black rounded border border-slate-600 overflow-hidden shadow-inner" id="xp-bar-container">
+                                    <div id="xp-bar-fill" class="absolute top-0 left-0 h-full bg-gradient-to-r from-purple-900 to-indigo-600 transition-all w-0"></div>
                                     <div id="xp-bar-text" class="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-white text-shadow-sm">0/0</div>
                                 </div>
                             </div>
                         </div>
                         <div class="grid grid-cols-2 gap-3 mt-1">
                             <div class="space-y-1">
-                                <label class="text-[9px] text-slate-500 font-bold uppercase tracking-widest block">Subclasse</label>
-                                <select id="editor-subclasseId" class="${inputClass} appearance-none cursor-pointer !py-1.5 !text-xs"></select>
+                                <label class="text-[9px] text-slate-500 font-bold uppercase tracking-widest block  mb-1">Subclasse</label>
+                                <select id="editor-subclasseId" class="${inputClass} "></select>
                             </div>
                             <div class="space-y-1">
-                                <label class="text-[9px] text-purple-400 font-bold uppercase tracking-widest block">Pts. Mestre</label>
+                                <label class="text-[9px] text-purple-400 font-bold uppercase tracking-widest block  mb-1">Pts. Mestre</label>
                                 <input type="number" id="editor-pontosExtrasMestre" class="w-full bg-slate-900 border border-purple-900/30 rounded px-2 py-1.5 text-xs text-center font-bold text-purple-300 outline-none" placeholder="0">
                             </div>
                         </div>
@@ -283,7 +283,7 @@ export async function renderFichaEditor(fichaId) {
                     </div>
 
                     <div class="flex flex-col flex-grow bg-slate-800 rounded-xl border border-slate-700 shadow-sm overflow-hidden min-h-[300px]">
-                        <div class="flex bg-slate-900 border-b border-slate-700 shrink-0">
+                        <div class="flex border-b border-slate-700 shrink-0">
                             <button class="bottom-tab-btn active px-4 py-2.5 text-[10px] font-bold uppercase tracking-widest text-slate-400 border-b-2 border-transparent hover:text-white transition-colors" onclick="window.switchBottomTab('historia')">História</button>
                             <button class="bottom-tab-btn px-4 py-2.5 text-[10px] font-bold uppercase tracking-widest text-slate-400 border-b-2 border-transparent hover:text-white transition-colors" onclick="window.switchBottomTab('anotacoes')">Anotações</button>
                             <button class="bottom-tab-btn flex items-center gap-1.5 px-4 py-2.5 text-[10px] font-bold uppercase tracking-widest text-slate-400 border-b-2 border-transparent hover:text-white transition-colors" onclick="window.switchBottomTab('objetivos')">
@@ -433,7 +433,7 @@ function setupImageGallery(container, urls, mainKey) {
 
     grid.innerHTML = '';
     
-    for (let i = 1; i <= 12; i++) {
+    for (let i = 1; i <= 26; i++) {
         const key = `imagem${i}`;
         const rawUrl = urls[key];
         

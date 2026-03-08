@@ -41,7 +41,7 @@ export function renderExtracaoTab() {
                         </div>
 
                         <div class="flex-1 overflow-y-auto custom-scroll bg-slate-900/50 border border-slate-700 rounded-xl p-4 shadow-inner relative">
-                            <div id="extracao-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 content-start"></div>
+                            <div id="extracao-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-9 xl:grid-cols-12 gap-3 content-start"></div>
                         </div>
                     </div>
 

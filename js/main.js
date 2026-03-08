@@ -1,9 +1,8 @@
 // ARQUIVO: js/main.js
 
-import { auth, db, storage, signInWithEmailAndPassword, signOut, onAuthStateChanged, collection, getDocs, doc, getDoc, onSnapshot, query, where, orderBy, writeBatch, runTransaction, deleteField, increment, updateDoc } from './core/firebase.js';
+import { auth, db, storage, signInWithEmailAndPassword, signOut, onAuthStateChanged, collection, getDocs, doc, getDoc, onSnapshot, query, where, orderBy, writeBatch, runTransaction, deleteField, increment, updateDoc, addDoc, serverTimestamp } from './core/firebase.js';
 import { globalState, ADMIN_EMAIL, PLACEHOLDER_IMAGE_URL, COINS } from './core/state.js';
 import { createBonusObject, calculateMainStats, getFomeDebuffMultiplier } from './core/calculos.js';
-
 import { renderPainelFichas, renderFichaEditor } from './tabs/painelFichas.js';
 import { renderRolagemDados } from './tabs/rolagemDados.js';
 import { renderCalculadoraCombate } from './tabs/calcCombate.js';
@@ -52,6 +51,7 @@ import { renderFirebaseMudaAllTab } from './admin/firebaseMudaAll.js';
 import { renderFirebaseMudaIfTab } from './admin/firebaseMudaIf.js';
 import { renderGerarTabelaXpTab } from './admin/gerarTabelaXp.js';
 import { renderMapaMundialTab } from './admin/mapaMundial.js';
+import { rtdb, rtdbRef, push, set, onValue, off, rtdbQuery, limitToLast, rtdbServerTimestamp } from './core/firebase.js';
 
 const dom = {};
 document.querySelectorAll('[id]').forEach(el => dom[el.id.replace(/-/g, '_')] = el);
@@ -732,47 +732,47 @@ window.renderSidebarDice = function() {
     c.innerHTML = dice.map(d => `<button onclick="window.rollDiceSidebar('${d.id}', ${d.sides}, '${d.label}')" class="bg-slate-800 hover:bg-amber-600 border border-slate-700 hover:border-amber-500 text-slate-300 hover:text-black font-bold text-[9px] h-8 rounded transition-colors shadow flex items-center justify-center cursor-pointer">${d.label}</button>`).join('');
 };
 
-window.rollDiceSidebar = async function(id, sides, label) {
-    const charId = globalState.selectedCharacterId;
-    if (!charId) return alert("Selecione um personagem primeiro para rolar dados!");
+// window.rollDiceSidebar = async function(id, sides, label) {
+//     const charId = globalState.selectedCharacterId;
+//     if (!charId) return alert("Selecione um personagem primeiro para rolar dados!");
 
-    const result = id === 'moeda' ? (Math.random() < 0.5 ? 'Cara' : 'Coroa') : Math.floor(Math.random() * sides) + 1;
-    const novoLog = { dado: label, valor: result, timestamp: Date.now() };
+//     const result = id === 'moeda' ? (Math.random() < 0.5 ? 'Cara' : 'Coroa') : Math.floor(Math.random() * sides) + 1;
+//     const novoLog = { dado: label, valor: result, timestamp: Date.now() };
 
-    const ficha = globalState.selectedCharacterData.ficha;
-    const logsAtuais = ficha.log_rolagens || [];
-    logsAtuais.unshift(novoLog);
-    if (logsAtuais.length > 50) logsAtuais.pop();
-    ficha.log_rolagens = logsAtuais;
+//     const ficha = globalState.selectedCharacterData.ficha;
+//     const logsAtuais = ficha.log_rolagens || [];
+//     logsAtuais.unshift(novoLog);
+//     if (logsAtuais.length > 50) logsAtuais.pop();
+//     ficha.log_rolagens = logsAtuais;
 
-    window.renderSidebarDiceLog();
+//     window.renderSidebarDiceLog();
 
-    try {
-        await updateDoc(doc(db, "rpg_fichas", charId), {
-            [`rolagens.${id}`]: result,
-            log_rolagens: logsAtuais
-        });
-    } catch(e) { console.error("Erro ao rolar:", e); }
-};
+//     try {
+//         await updateDoc(doc(db, "rpg_fichas", charId), {
+//             [`rolagens.${id}`]: result,
+//             log_rolagens: logsAtuais
+//         });
+//     } catch(e) { console.error("Erro ao rolar:", e); }
+// };
 
-window.renderSidebarDiceLog = function() {
-    const container = document.getElementById('sidebar-dice-log');
-    if (!container) return;
-    const logs = globalState.selectedCharacterData?.ficha?.log_rolagens || [];
+// window.renderSidebarDiceLog = function() {
+//     const container = document.getElementById('sidebar-dice-log');
+//     if (!container) return;
+//     const logs = globalState.selectedCharacterData?.ficha?.log_rolagens || [];
     
-    if (logs.length === 0) {
-        container.innerHTML = '<div class="text-slate-600 italic text-center text-[9px] py-6">Nenhuma rolagem feita ainda.</div>';
-        return;
-    }
+//     if (logs.length === 0) {
+//         container.innerHTML = '<div class="text-slate-600 italic text-center text-[9px] py-6">Nenhuma rolagem feita ainda.</div>';
+//         return;
+//     }
     
-    container.innerHTML = logs.slice(0, 15).map(log => `
-        <div class="flex justify-between items-center border-b border-slate-800/50 pb-1 mb-1">
-            <span class="text-[8px] text-slate-500">${new Date(log.timestamp).toLocaleTimeString('pt-BR')}</span>
-            <span class="text-slate-300 font-bold text-[9px]">${log.dado}</span>
-            <span class="text-amber-400 font-black text-xs">${log.valor}</span>
-        </div>
-    `).join('');
-};
+//     container.innerHTML = logs.slice(0, 15).map(log => `
+//         <div class="flex justify-between items-center border-b border-slate-800/50 pb-1 mb-1">
+//             <span class="text-[8px] text-slate-500">${new Date(log.timestamp).toLocaleTimeString('pt-BR')}</span>
+//             <span class="text-slate-300 font-bold text-[9px]">${log.dado}</span>
+//             <span class="text-amber-400 font-black text-xs">${log.valor}</span>
+//         </div>
+//     `).join('');
+// };
 
 // --- GERENCIAMENTO DE CACHES E ATUALIZAÇÃO LATERAL ---
 async function loadCache() {
@@ -967,15 +967,18 @@ function handleCharacterSelect(id) {
         unsubscribeChar = null;
     }
     
+    // NOVO: Gatilho imediato que zera a tela antes do novo personagem carregar
+    if (typeof window.resetHubChat === 'function') window.resetHubChat();
+
     updateCharacterSessions(id);
 
+    // Se o usuário selecionou "-- Selecione um Personagem --" (Vazio)
     if(!id) {
         globalState.selectedCharacterId = null;
         globalState.selectedCharacterData = null;
         localStorage.removeItem('personagemAtivoId');
         renderHeaderWidget();
         if(window.updateGlobalBars) window.updateGlobalBars();
-        if(window.renderSidebarDiceLog) window.renderSidebarDiceLog();
         
         let activeTab = 'painel-fichas';
         document.querySelectorAll('.tab-content').forEach(c => {
@@ -985,6 +988,7 @@ function handleCharacterSelect(id) {
         return;
     }
 
+    // Se o usuário escolheu um personagem válido
     globalState.selectedCharacterId = id;
     localStorage.setItem('personagemAtivoId', id);
 
@@ -995,13 +999,13 @@ function handleCharacterSelect(id) {
             
             globalState.selectedCharacterData = await gatherAllCharacterData(id);
             if(window.updateGlobalBars) window.updateGlobalBars();
-            if(window.renderSidebarDiceLog) window.renderSidebarDiceLog();
             
             let activeTab = 'painel-fichas';
             document.querySelectorAll('.tab-content').forEach(c => {
                 if (!c.classList.contains('hidden')) activeTab = c.id.replace('-content', '');
             });
             
+            // Recarrega a aba que o usuário estava visualizando
             if(activeTab === 'painel-fichas') {
                 if (!document.getElementById('editor-nome')) window.renderFichaEditor(id); 
             } 
@@ -1122,6 +1126,269 @@ window.updateGlobalBars = function() {
     setWidth('bar-fome-fill', Math.max(0, Math.min(100, (fomeAtual / fomeMax) * 100)));
 };
 
+// ==========================================
+// --- HUB VTT: CHAT E DADOS POR SESSÃO ---
+// ==========================================
+let currentHubTab = 'hub-dice';
+let activeChatRef = null; 
+
+// Função de limpeza absoluta de interface
+window.resetHubChat = function() {
+    // 1. Desliga o rádio do banco de dados
+    if (activeChatRef) {
+        off(activeChatRef);
+        activeChatRef = null;
+    }
+    
+    // 2. Limpa a memória local das mensagens
+    globalState.currentChatLogs = [];
+    
+    // 3. Oculta todos os avisos de mensagens não lidas
+    ['hub-dice', 'hub-chat', 'hub-master', 'hub-whisper'].forEach(tab => {
+        const badge = document.getElementById(`badge-${tab}`);
+        if (badge) badge.classList.add('hidden');
+    });
+    
+    // 4. Limpa a barra lateral
+    renderHubMessages();
+    
+    // 5. Tenta limpar a aba grande se ela estiver aberta no fundo
+    const logGrande = document.getElementById('log-lista');
+    if (logGrande) logGrande.innerHTML = '<p class="text-slate-500 text-sm italic">Nenhuma rolagem ou sessão ativa.</p>';
+};
+
+window.switchHubTab = function(tabId) {
+    currentHubTab = tabId;
+    
+    // Identificador único de quem está lendo (Personagem ou Mestre)
+    const watcherId = globalState.selectedCharacterId || (globalState.isAdmin ? 'master' : 'unknown');
+    
+    // Salva o momento exato em que o usuário abriu esta aba
+    localStorage.setItem(`chatRead_${watcherId}_${tabId}`, Date.now());
+
+    document.querySelectorAll('.hub-tab-btn').forEach(btn => {
+        if (btn.dataset.target === tabId) {
+            btn.classList.add('active');
+            const badge = btn.querySelector('span');
+            if(badge) badge.classList.add('hidden'); 
+        } else {
+            btn.classList.remove('active');
+        }
+    });
+
+    document.getElementById('hub-footer-dice')?.classList.toggle('hidden', tabId !== 'hub-dice');
+    document.getElementById('hub-footer-chat')?.classList.toggle('hidden', tabId !== 'hub-chat' && tabId !== 'hub-master');
+    document.getElementById('hub-footer-whisper')?.classList.toggle('hidden', tabId !== 'hub-whisper');
+    
+    const inputChat = document.getElementById('hub-chat-input');
+    if(inputChat) inputChat.placeholder = tabId === 'hub-master' ? "Aviso do Mestre..." : "Enviar para todos...";
+
+    renderHubMessages(); 
+};
+
+window.sendHubMessage = async function(type) {
+    if (!globalState.selectedCharacterId && !globalState.isAdmin) return alert("Selecione um personagem.");
+    if (!globalState.activeSessionId || globalState.activeSessionId === 'world') return alert("Selecione uma Mesa na sessão para usar o chat.");
+    if (type === 'mestre' && !globalState.isAdmin) return alert("Apenas o Mestre pode mandar avisos globais.");
+
+    let inputEl, text, targetId = null, targetName = null;
+
+    if (type === 'whisper') {
+        inputEl = document.getElementById('hub-whisper-input');
+        const sel = document.getElementById('hub-whisper-target');
+        targetId = sel?.value;
+        if (!targetId) return alert("Selecione para quem deseja sussurrar.");
+        targetName = sel.options[sel.selectedIndex].text;
+    } else {
+        inputEl = document.getElementById('hub-chat-input');
+    }
+
+    text = inputEl?.value.trim();
+    if (!text) return;
+
+    let remetenteId = "master"; let remetenteNome = "Mestre";
+    if (globalState.selectedCharacterData && globalState.selectedCharacterData.ficha) {
+        remetenteId = globalState.selectedCharacterId;
+        remetenteNome = globalState.selectedCharacterData.ficha.nome;
+    }
+
+    const payload = {
+        tipo: type,
+        remetenteId,
+        remetenteNome,
+        mensagem: text,
+        timestamp: rtdbServerTimestamp()
+    };
+
+    if (type === 'whisper') { payload.destinatarioId = targetId; payload.destinatarioNome = targetName; }
+    inputEl.value = ''; 
+
+    try {
+        const chatRef = rtdbRef(rtdb, `session_chats/${globalState.activeSessionId}`);
+        const newMsgRef = push(chatRef);
+        await set(newMsgRef, payload);
+    } catch(e) {
+        console.error("Erro ao enviar:", e); alert("Erro ao enviar mensagem.");
+    }
+};
+
+window.listenToSessionChat = function(sessionId) {
+    if (activeChatRef) {
+        off(activeChatRef); 
+        activeChatRef = null;
+    }
+    
+    globalState.currentChatLogs = [];
+    renderHubMessages(); 
+
+    if (!sessionId || sessionId === 'world') return;
+
+    const baseRef = rtdbRef(rtdb, `session_chats/${sessionId}`);
+    activeChatRef = rtdbQuery(baseRef, limitToLast(100)); 
+    
+    onValue(activeChatRef, (snapshot) => {
+        const data = snapshot.val();
+        const logs = [];
+        
+        if (data) {
+            Object.keys(data).forEach(key => logs.push({ id: key, ...data[key] }));
+            logs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0)); 
+        }
+
+        // LÓGICA DE NOTIFICAÇÕES PERSISTENTES
+        const watcherId = globalState.selectedCharacterId || (globalState.isAdmin ? 'master' : 'unknown');
+        const latestTimes = { 'hub-dice': 0, 'hub-chat': 0, 'hub-master': 0, 'hub-whisper': 0 };
+
+        // Descobre a hora da última mensagem de CADA aba
+        logs.forEach(d => {
+            let targetAba = '';
+            if(d.tipo === 'dice') targetAba = 'hub-dice';
+            else if(d.tipo === 'geral') targetAba = 'hub-chat';
+            else if(d.tipo === 'mestre') targetAba = 'hub-master';
+            else if(d.tipo === 'whisper') {
+                 if(globalState.isAdmin || d.destinatarioId === watcherId || d.remetenteId === watcherId) targetAba = 'hub-whisper';
+            }
+            if(targetAba && d.timestamp > latestTimes[targetAba]) {
+                latestTimes[targetAba] = d.timestamp;
+            }
+        });
+
+        // Compara com o que o usuário leu no localStorage
+        ['hub-dice', 'hub-chat', 'hub-master', 'hub-whisper'].forEach(tab => {
+            const badge = document.getElementById(`badge-${tab}`);
+            if (!badge) return;
+
+            if (tab === currentHubTab) {
+                // Se a aba está aberta agora, atualiza a data de leitura e esconde a bolinha
+                localStorage.setItem(`chatRead_${watcherId}_${tab}`, Date.now());
+                badge.classList.add('hidden');
+            } else if (latestTimes[tab] > 0) {
+                // Se não está aberta, verifica se há mensagens novas depois da última leitura
+                const lastRead = Number(localStorage.getItem(`chatRead_${watcherId}_${tab}`) || 0);
+                if (latestTimes[tab] > lastRead) {
+                    badge.classList.remove('hidden'); // TEM NOVIDADE!
+                } else {
+                    badge.classList.add('hidden'); // TUDO LIDO!
+                }
+            }
+        });
+
+        globalState.currentChatLogs = logs.reverse(); 
+        renderHubMessages();
+    });
+};
+
+function renderHubMessages() {
+    const container = document.getElementById('hub-log-container');
+    if (!container) return;
+
+    if (!globalState.activeSessionId || globalState.activeSessionId === 'world') {
+        container.innerHTML = '<div class="text-slate-600 italic text-center text-[9px] py-6 px-4">Selecione uma Sessão na barra inferior para acessar o Chat e as Rolagens conjuntas.</div>';
+        return;
+    }
+
+    const logs = globalState.currentChatLogs || [];
+    const watcherId = globalState.selectedCharacterId || (globalState.isAdmin ? 'master' : 'unknown');
+    
+    const filteredLogs = logs.filter(log => {
+        if (currentHubTab === 'hub-dice') return log.tipo === 'dice';
+        if (currentHubTab === 'hub-chat') return log.tipo === 'geral';
+        if (currentHubTab === 'hub-master') return log.tipo === 'mestre';
+        if (currentHubTab === 'hub-whisper') {
+             if (log.tipo !== 'whisper') return false;
+             if (globalState.isAdmin) return true;
+             return log.remetenteId === watcherId || log.destinatarioId === watcherId;
+        }
+        return true;
+    });
+
+    if (filteredLogs.length === 0) {
+        container.innerHTML = '<div class="text-slate-600 italic text-center text-[9px] py-6 px-4">Nenhum registro nesta aba ainda.</div>';
+        return;
+    }
+
+    let html = '';
+    [...filteredLogs].reverse().forEach(log => {
+        const timeStr = log.timestamp ? new Date(log.timestamp).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'}) : '...';
+        
+        if (log.tipo === 'dice') {
+             html += `
+                <div class="bg-slate-900/30 border-l-2 border-amber-500 pl-2 py-1 mb-1 flex items-center flex-wrap gap-1.5">
+                    <span class="text-sky-400 font-bold text-[9px]">${log.remetenteNome}</span>
+                    <span class="text-slate-400 text-[10px]">rolou <strong class="text-slate-200">${log.dado}</strong> <i class="fas fa-arrow-right text-[8px] text-slate-600 mx-0.5"></i></span>
+                    <span class="text-amber-400 font-black text-[12px] drop-shadow-md leading-none">${log.valor}</span>
+                    <span class="text-slate-600 text-[8px] ml-auto">${timeStr}</span>
+                </div>`;
+        }
+        else if (log.tipo === 'geral') {
+             html += `
+                <div class="bg-slate-900/50 border-l-2 border-slate-600 pl-2 py-1 mb-1">
+                    <div class="flex justify-between items-baseline mb-0.5">
+                        <span class="text-amber-500 font-bold text-[9px]">${log.remetenteNome}</span>
+                        <span class="text-slate-500 text-[8px]">${timeStr}</span>
+                    </div>
+                    <div class="text-slate-200 text-[10px] break-words leading-tight">${log.mensagem}</div>
+                </div>`;
+        }
+        else if (log.tipo === 'mestre') {
+             html += `
+                <div class="bg-red-900/20 border border-red-900/50 rounded p-2 mb-1 shadow-inner">
+                    <div class="text-red-500 font-bold text-[9px] uppercase tracking-widest mb-1 flex justify-between">
+                        <span><i class="fas fa-crown"></i> ${log.remetenteNome}</span>
+                        <span class="text-[8px] opacity-60">${timeStr}</span>
+                    </div>
+                    <div class="text-red-200 text-[10px] break-words italic leading-relaxed">${log.mensagem}</div>
+                </div>`;
+        }
+        else if (log.tipo === 'whisper') {
+             const isMe = log.remetenteId === watcherId;
+             html += `
+                <div class="bg-purple-900/20 border-l-2 border-purple-500 pl-2 py-1 mb-1">
+                    <div class="flex justify-between items-baseline mb-0.5">
+                        <span class="text-purple-400 font-bold text-[9px]">${isMe ? 'Para: ' + log.destinatarioNome : 'De: ' + log.remetenteNome}</span>
+                        <span class="text-slate-500 text-[8px]">${timeStr}</span>
+                    </div>
+                    <div class="text-purple-200 text-[10px] break-words italic leading-tight">"${log.mensagem}"</div>
+                </div>`;
+        }
+    });
+
+    container.innerHTML = html;
+    container.scrollTop = container.scrollHeight; 
+}
+
+// Binds de Eventos de Tela do Hub
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.hub-tab-btn').forEach(btn => btn.addEventListener('click', (e) => window.switchHubTab(e.currentTarget.dataset.target)));
+    const btnSend = document.getElementById('hub-btn-send'); const inputChat = document.getElementById('hub-chat-input');
+    if(btnSend) btnSend.addEventListener('click', () => window.sendHubMessage(currentHubTab === 'hub-master' ? 'mestre' : 'geral'));
+    if(inputChat) inputChat.addEventListener('keypress', (e) => { if (e.key === 'Enter') window.sendHubMessage(currentHubTab === 'hub-master' ? 'mestre' : 'geral'); });
+    const btnSendW = document.getElementById('hub-btn-whisper-send'); const inputW = document.getElementById('hub-whisper-input');
+    if(btnSendW) btnSendW.addEventListener('click', () => window.sendHubMessage('whisper'));
+    if(inputW) inputW.addEventListener('keypress', (e) => { if (e.key === 'Enter') window.sendHubMessage('whisper'); });
+});
+// ==========================================
+
 // --- GESTÃO DE SESSÕES ---
 async function updateCharacterSessions(charId) {
     const sessionSelect = document.getElementById('session-select');
@@ -1156,6 +1423,10 @@ async function updateCharacterSessions(charId) {
                     sessionSelect.value = "world";
                     globalState.activeSessionId = "world";
                     localStorage.setItem(`sessaoAtiva_${charId}`, "world");
+                } else if (globalState.activeSessionId !== "world") {
+                    // NOVO: Se ele já tem uma sessão ativa válida, auto-carrega o chat RTDB e sussurros!
+                    if (window.listenToSessionChat) window.listenToSessionChat(globalState.activeSessionId);
+                    if (typeof popularSussurros === 'function') popularSussurros();
                 }
             }
         } else {
@@ -1173,8 +1444,31 @@ document.addEventListener('change', (e) => {
         renderHeaderWidget();
         const arenaTab = document.getElementById('arena-combate-content');
         if (arenaTab && !arenaTab.classList.contains('hidden') && window.arena?.init) window.arena.init();
+        
+        // NOVO: Reinicia o listener do chat e popula a lista de sussurros
+        if(window.listenToSessionChat) window.listenToSessionChat(e.target.value);
+        popularSussurros();
     }
 });
+
+function popularSussurros() {
+    const sel = document.getElementById('hub-whisper-target');
+    if(!sel) return;
+    sel.innerHTML = '<option value="">Selecione o alvo...</option>';
+    
+    if(!globalState.activeSessionId || globalState.activeSessionId === 'world') return;
+    
+    const sess = globalState.userSessions?.find(s => s.id === globalState.activeSessionId);
+    if(sess && sess.playerIds) {
+        sess.playerIds.forEach(pId => {
+            if(pId === globalState.selectedCharacterId) return; // Não pode sussurrar pra si mesmo
+            const char = globalState.cache.all_personagens.get(pId);
+            if(char) {
+                sel.add(new Option(char.nome, pId));
+            }
+        });
+    }
+}
 
 // --- HEADER DO MUNDO ---
 window.getSessionTimeAndPeriod = function() {
