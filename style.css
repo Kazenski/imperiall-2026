@@ -11,7 +11,7 @@
     --bordas-destaques: #334155;
     --borda-interna: #475569;
     --destaque-principal: #f59e0b;
-    --destaque-secundario: #d97706;
+    --destaque-secundario: #f59e0b;
     --sucesso: #16a34a;
     --erro: #dc2626;
     --info: #2563eb;
@@ -1150,7 +1150,7 @@ input[type=range]::-webkit-slider-runnable-track {
 .btn-success { background-color: #16a34a; color: white; } 
 .btn-success:hover { background-color: #15803d; }
 .btn-edit { background-color: #f59e0b; color: black; } 
-.btn-edit:hover { background-color: #d97706; }
+.btn-edit:hover { background-color: #16a34a; }
 .btn-info { background-color: #3b82f6; color: white; } 
 .btn-info:hover { background-color: #2563eb; }
 .btn-danger { background-color: #ef4444; color: white; } 
