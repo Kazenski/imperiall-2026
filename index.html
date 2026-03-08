@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head> 
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mestre Leoma - VTT Panel</title>
+
+    <link rel="icon" type="image/png" href="./imagens/favicon/faviconKazenski.png">
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" />
+    <link rel="stylesheet" href="style.css" />
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+</head>
+<body class="bg-[#020617] text-slate-200 font-sans h-screen w-screen flex flex-col overflow-hidden">
+
+    <div id="auth-view" class="fixed inset-0 z-[9999] bg-[#020617] flex items-center justify-center">
+        <div class="max-w-md w-full bg-slate-900 p-8 rounded-xl border border-amber-500/30 shadow-2xl">
+            <h2 class="text-3xl font-bold text-center text-amber-400 mb-6 font-cinzel">Acesso ao Sistema</h2>
+            <div class="space-y-4">
+                <div>
+                    <label class="text-xs text-slate-400 font-bold uppercase tracking-widest mb-1 block">Email</label>
+                    <input type="email" id="auth-email" class="w-full bg-[#020617] border border-slate-700 rounded px-4 py-3 outline-none focus:border-amber-500 text-white">
+                </div>
+                <div>
+                    <label class="text-xs text-slate-400 font-bold uppercase tracking-widest mb-1 block">Senha</label>
+                    <input type="password" id="auth-password" class="w-full bg-[#020617] border border-slate-700 rounded px-4 py-3 outline-none focus:border-amber-500 text-white">
+                </div>
+                <button id="btn-login" class="w-full bg-amber-600 hover:bg-amber-500 text-black font-bold uppercase tracking-widest py-3 rounded transition-colors mt-4">Entrar</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="app-view" class="hidden flex-col h-full w-full">
+
+        <nav id="global-top-nav" class="bg-slate-900 border-b border-slate-800 flex items-center justify-between px-6 h-16 shrink-0 shadow-md relative z-50">
+            <div class="flex items-center gap-8 h-full">
+                <div class="font-cinzel text-xl font-bold text-amber-500 tracking-wider drop-shadow-md">
+                    PAINEL UNIFICADO
+                </div>
+                
+                <div class="hidden md:flex items-center gap-2 h-full py-3">
+                    <button onclick="window.showTab('inicio-content')" class="master-nav-btn px-4 py-2 bg-slate-800 hover:bg-amber-600 border border-slate-700 hover:border-amber-500 rounded text-slate-300 hover:text-black transition-all text-[10px] font-bold uppercase tracking-widest shadow-sm">Início</button>
+                    <button class="master-nav-btn px-4 py-2 bg-slate-800 hover:bg-amber-600 border border-slate-700 hover:border-amber-500 rounded text-slate-300 hover:text-black transition-all text-[10px] font-bold uppercase tracking-widest shadow-sm">O Mundo</button>
+                    <button class="master-nav-btn px-4 py-2 bg-slate-800 hover:bg-amber-600 border border-slate-700 hover:border-amber-500 rounded text-slate-300 hover:text-black transition-all text-[10px] font-bold uppercase tracking-widest shadow-sm">Manual e Regras</button>
+                    <button class="master-nav-btn px-4 py-2 bg-slate-800 hover:bg-amber-600 border border-slate-700 hover:border-amber-500 rounded text-slate-300 hover:text-black transition-all text-[10px] font-bold uppercase tracking-widest shadow-sm">Ao Mestre</button>
+                    <button class="master-nav-btn hidden px-4 py-2 bg-slate-800 hover:bg-purple-600 border border-slate-700 hover:border-purple-500 rounded text-slate-300 hover:text-white transition-all text-[10px] font-bold uppercase tracking-widest shadow-sm">Painel Admin</button>
+                    <button class="master-nav-btn px-4 py-2 bg-amber-600 hover:bg-amber-500 border border-amber-500 rounded text-black transition-all text-[10px] font-bold uppercase tracking-widest shadow-sm">Ao Jogador</button>
+<button class="master-nav-btn px-4 py-2 bg-slate-800 hover:bg-amber-600 border border-slate-700 hover:border-amber-500 rounded text-slate-300 hover:text-black transition-all text-[10px] font-bold uppercase tracking-widest shadow-sm">Atualizações</button>
+                </div>
+            </div>
+
+            <div class="flex items-center h-full py-2">
+                <div id="header-world-widget" class="hidden mr-4 pr-4 border-r border-slate-700 my-2"></div>
+                <button id="btn-logout" class="bg-red-900/20 hover:bg-red-600 border border-red-900/50 hover:border-red-500 text-red-400 hover:text-white px-5 py-2 rounded text-[10px] uppercase font-bold tracking-widest transition shadow-sm">Sair</button>
+            </div>
+        </nav>
+
+        <div class="flex flex-1 overflow-hidden">
+            
+            <aside id="main-sidebar" class="w-64 bg-[#0a0f18] border-r border-slate-800 flex flex-col shrink-0 overflow-hidden shadow-2xl z-40 relative">
+                
+                <div class="flex flex-col shrink-0">
+                    <div class="p-2 bg-slate-900 border-b border-slate-800">
+                        <label for="character-select" class="block text-[9px] text-slate-500 font-bold uppercase tracking-widest mb-1">Personagem Ativo</label>
+                        <select id="character-select" class="w-full bg-slate-950 border border-slate-700 rounded text-amber-400 font-bold p-1 text-xs focus:border-amber-500 outline-none transition-colors shadow-inner">
+                            <option value="">-- Carregando... --</option>
+                        </select>
+                    </div>
+
+                    <div class="w-full bg-black relative border-b border-slate-800 shrink-0">
+                        <img id="sidebar-char-img" src="https://placehold.co/400x400/0f172a/d4af37?text=Sem+Foto" class="w-full h-full object-cover opacity-90 object-top">
+                        <div class="absolute bottom-0 left-0 w-full h-1/2 bg-gradient-to-t from-[#0a0f18] to-transparent"></div>
+                    </div>
+
+                    <div class="px-1.5 pt-1 pb-1.5 text-center border-b border-slate-800">
+                        <h2 id="sidebar-char-name" class="font-cinzel text-xl text-amber-400 font-bold leading-tight mb-1 truncate drop-shadow-md">Nenhum Selecionado</h2>
+                        
+                        <div class="flex items-center justify-center gap-1.5 text-[10px] text-slate-300 uppercase font-bold bg-slate-900/80 py-1 rounded border border-slate-700 shadow-inner mb-1">
+                            <span id="sidebar-char-class" class="text-sky-400 truncate">Classe</span>
+                            <span class="w-1 h-1 rounded-full bg-slate-600 shrink-0"></span>
+                            <span id="sidebar-char-subclass" class="text-emerald-400 truncate">Subclasse</span>
+                        </div>
+
+                        <div class="flex items-center justify-between gap-1 text-[10px] font-bold">
+                            <div class="bg-slate-950 border border-slate-700 px-2 py-1 rounded flex-1 flex flex-col shadow-inner">
+                                <span class="text-slate-500 uppercase text-[8px]">ATK</span>
+                                <span id="sidebar-char-atk" class="text-amber-400 text-sm">0</span>
+                            </div>
+                            <div class="bg-slate-950 border border-slate-700 px-2 py-1 rounded flex-1 flex flex-col shadow-inner">
+                                <span class="text-slate-500 uppercase text-[8px]">DEF</span>
+                                <span id="sidebar-char-def" class="text-blue-400 text-sm">0</span>
+                            </div>
+                            <div class="bg-slate-950 border border-slate-700 px-2 py-1 rounded flex-1 flex flex-col shadow-inner">
+                                <span class="text-slate-500 uppercase text-[8px]">EVA</span>
+                                <span id="sidebar-char-eva" class="text-emerald-400 text-sm">0</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="p-2 flex flex-col gap-1.5 border-b border-slate-800 bg-slate-900/20">
+                        <div class="relative w-full h-4 bg-slate-950 rounded border border-slate-700 overflow-hidden shadow-inner group">
+                            <div id="hdr-hp-base" class="absolute left-0 top-0 h-full bg-gradient-to-r from-red-700 to-red-500 transition-all z-0" style="width: 0%;"></div>
+                            <div id="hdr-hp-extra" class="absolute left-0 top-0 h-full bg-gradient-to-r from-red-900 to-red-800 transition-all border-r border-white/30 z-10" style="width: 0%;"></div>
+                            <div id="hdr-hp-shield" class="absolute left-0 top-0 h-full bg-gradient-to-r from-amber-600 to-amber-400 transition-all shadow-[0_0_10px_orange] border-r border-white/60 z-20" style="width: 0%;"></div>
+                            <div class="absolute inset-0 flex items-center justify-between px-2 text-[9px] font-bold text-white drop-shadow-[0_1px_1px_rgba(0,0,0,1)] z-30 pointer-events-none">
+                                <span>HP</span> <span id="hdr-hp-text">0/0</span>
+                            </div>
+                        </div>
+                        <div class="relative w-full h-4 bg-slate-950 rounded border border-slate-700 overflow-hidden shadow-inner group">
+                            <div id="hdr-mp-base" class="absolute left-0 top-0 h-full bg-gradient-to-r from-blue-700 to-blue-500 transition-all z-0" style="width: 0%;"></div>
+                            <div id="hdr-mp-extra" class="absolute left-0 top-0 h-full bg-gradient-to-r from-blue-900 to-blue-800 transition-all border-r border-white/30 z-10" style="width: 0%;"></div>
+                            <div id="hdr-mp-shield" class="absolute left-0 top-0 h-full bg-gradient-to-r from-cyan-500 to-cyan-300 transition-all shadow-[0_0_10px_cyan] border-r border-white/60 z-20" style="width: 0%;"></div>
+                            <div class="absolute inset-0 flex items-center justify-between px-2 text-[9px] font-bold text-white drop-shadow-[0_1px_1px_rgba(0,0,0,1)] z-30 pointer-events-none">
+                                <span>MP</span> <span id="hdr-mp-text">0/0</span>
+                            </div>
+                        </div>
+                        <div id="bar-fome-track" class="relative w-full h-3 bg-slate-950 rounded border border-slate-700 overflow-hidden shadow-inner mt-1">
+                            <div id="bar-fome-fill" class="absolute left-0 top-0 h-full bg-gradient-to-r from-amber-900 to-amber-800 transition-all z-0" style="width: 100%;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex-1 flex flex-col min-h-0 bg-slate-900/60 border-b border-slate-800 flex-grow relative">
+                    
+                    <div class="flex bg-slate-950 border-b border-slate-800 shrink-0">
+                        <button class="hub-tab-btn active flex-1 py-2 text-[10px] text-slate-400 hover:text-white transition relative" data-target="hub-dice" title="Rolagens">
+                            <i class="fas fa-dice"></i>
+                            <span id="badge-hub-dice" class="hidden absolute top-1 right-2 w-2 h-2 rounded-full bg-red-500 shadow-[0_0_5px_red]"></span>
+                        </button>
+                        <button class="hub-tab-btn flex-1 py-2 text-[10px] text-slate-400 hover:text-white transition relative" data-target="hub-chat" title="Chat Geral">
+                            <i class="fas fa-comments"></i>
+                            <span id="badge-hub-chat" class="hidden absolute top-1 right-2 w-2 h-2 rounded-full bg-red-500 shadow-[0_0_5px_red]"></span>
+                        </button>
+                        <button class="hub-tab-btn flex-1 py-2 text-[10px] text-slate-400 hover:text-white transition relative" data-target="hub-master" title="Avisos do Mestre">
+                            <i class="fas fa-crown"></i>
+                            <span id="badge-hub-master" class="hidden absolute top-1 right-2 w-2 h-2 rounded-full bg-red-500 shadow-[0_0_5px_red]"></span>
+                        </button>
+                        <button class="hub-tab-btn flex-1 py-2 text-[10px] text-slate-400 hover:text-white transition relative" data-target="hub-whisper" title="Sussurros">
+                            <i class="fas fa-user-secret"></i>
+                            <span id="badge-hub-whisper" class="hidden absolute top-1 right-2 w-2 h-2 rounded-full bg-purple-500 shadow-[0_0_5px_purple]"></span>
+                        </button>
+                    </div>
+                    
+                    <style>
+                        .hub-tab-btn.active { color: #f59e0b; background: rgba(245,158,11,0.05); border-bottom: 2px solid #f59e0b; }
+                        .hub-tab-btn[data-target="hub-whisper"].active { color: #a855f7; background: rgba(168,85,247,0.05); border-bottom: 2px solid #a855f7; }
+                    </style>
+
+                    <div id="hub-log-container" class="flex-1 overflow-y-auto custom-scroll p-2 bg-slate-950/50 space-y-2 relative">
+                        </div>
+
+                    <div class="p-2 bg-slate-900 border-t border-slate-800 shrink-0">
+                        
+                        <div id="hub-footer-dice" class="flex flex-col">
+                            <h4 class="text-[8px] text-slate-500 font-bold uppercase mb-1.5 tracking-widest text-center">Rolar Dados</h4>
+                            <div id="sidebar-dice-area" class="grid grid-cols-4 gap-1.5"></div>
+                        </div>
+
+                        <div id="hub-footer-chat" class="hidden flex-col gap-2">
+                            <div class="flex gap-1 relative">
+                                <input type="text" id="hub-chat-input" placeholder="Enviar para todos..." class="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-xs text-white outline-none focus:border-amber-500 transition-colors pr-8">
+                                <button id="hub-btn-send" class="absolute right-1 top-1 bottom-1 text-amber-600 hover:text-amber-400 px-2 transition-colors"><i class="fas fa-paper-plane text-xs"></i></button>
+                            </div>
+                        </div>
+
+                        <div id="hub-footer-whisper" class="hidden flex-col gap-1.5">
+                            <select id="hub-whisper-target" class="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-[10px] font-bold text-purple-400 outline-none focus:border-purple-500 uppercase">
+                                <option value="">Selecione o alvo...</option>
+                                </select>
+                            <div class="flex gap-1 relative">
+                                <input type="text" id="hub-whisper-input" placeholder="Mensagem secreta..." class="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-xs text-white outline-none focus:border-purple-500 transition-colors pr-8">
+                                <button id="hub-btn-whisper-send" class="absolute right-1 top-1 bottom-1 text-purple-500 hover:text-purple-300 px-2 transition-colors"><i class="fas fa-paper-plane text-xs"></i></button>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+                
+                <div class="p-3 bg-slate-900/30 shrink-0">
+                    <div id="session-selector-container">
+                        <select id="session-select" class="w-full bg-slate-950 border border-indigo-900/50 rounded text-indigo-300 p-1.5 text-[9px] font-bold outline-none uppercase shadow-inner">
+                            <option value="world">Mundial (Padrão)</option>
+                        </select>
+                    </div>
+                </div>
+            </aside>
+
+            <nav id="sub-menu-bar" class="w-48 bg-slate-900 border-r border-slate-800 flex flex-col items-start py-4 shrink-0 overflow-y-auto custom-scroll z-30 gap-1 shadow-2xl">
+                </nav>
+
+            <main id="content-container" class="flex-1 overflow-y-auto custom-scroll p-6 relative bg-slate-950">
+                
+                <div id="default-view" class="h-full w-full flex flex-col items-center justify-center opacity-20 pointer-events-none select-none overflow-y-auto p-6 hidden"></div>
+
+                <div id="painel-fichas-content" class="tab-content active h-full"></div>
+                <div id="rolagem-dados-content" class="tab-content hidden">
+                    <div id="log-rolagens-container" class="max-w-3xl mx-auto mt-0">
+                        <h3 class="font-cinzel text-xl mb-4 text-slate-300 border-b border-slate-700 pb-2">Log de Rolagens Completo</h3>
+                        <div id="log-lista" class="space-y-1"></div>
+                    </div>
+                </div>
+                <div id="calculadora-combate-content" class="tab-content hidden">
+                    <div class="form-field mb-4"><select id="calc-combate-habilidade-select" class="hidden"></select></div>
+                    <p id="calc-combate-mensagem-status"></p>
+                    <div id="calc-combate-painel-calculo" class="hidden">
+                        <p id="calc-combate-valor-base"></p>
+                        <div id="calc-combate-lista-atributos"></div>
+                    </div>
+                </div>
+                <div id="minhas-habilidades-content" class="tab-content hidden"></div>
+                <div id="mochila-content" class="tab-content hidden"></div>
+                <div id="itens-equipados-content" class="tab-content h-full hidden"></div>
+                <div id="calculadora-atributos-content" class="tab-content hidden">
+                    <div id="calculator-content" class="hidden">
+                        <div id="atk-container"></div>
+                        <div id="def-container"></div>
+                        <div id="eva-container"></div>
+                    </div>
+                </div>
+                <div id="constelacao-content" class="tab-content h-full p-3 overflow-hidden hidden"></div>
+                <div id="crafting-content" class="tab-content hidden"></div>
+                <div id="extracao-content" class="tab-content hidden"></div>
+                <div id="colecao-craft-content" class="tab-content hidden"></div>
+                <div id="arma-espiritual-content" class="tab-content hidden"></div>
+                <div id="meus-pets-content" class="tab-content hidden"></div>
+                <div id="recursos-reputacao-content" class="tab-content h-full flex flex-col hidden"></div>
+                <div id="comercio-content" class="tab-content h-full flex flex-col hidden"></div>
+                <div id="mapa-movimento-content" class="tab-content h-full flex flex-col hidden">
+                    <div id="map-player-container" class="flex-grow rounded-xl border border-slate-700 overflow-hidden relative z-0"></div>
+                </div>
+                <div id="arena-combate-content" class="tab-content h-full flex flex-col hidden">
+                    <div id="arena-content" class="flex-grow w-full h-full relative z-0"></div>
+                </div>
+                <!-- Páginas de atualizações -->
+                <div id="atualizacoes-novidades-content" class="tab-content hidden h-full flex flex-col"></div>
+
+                <div id="simular-ficha-content" class="tab-content hidden h-full flex flex-col"></div>
+                
+                <div id="inicio-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                
+                <!-- Páginas de visão geral do rpg -->
+                <div id="conheca-mundo-content" class="tab-content hidden h-full flex flex-col"></div>
+                <div id="os-deuses-content" class="tab-content hidden h-full flex flex-col p-0 md:p-0"></div>
+                <div id="lendas-mundo-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <div id="npcs-geral-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <div id="racas-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <div id="classes-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <div id="subclasses-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <div id="habilidades-regras-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <div id="profissoes-regras-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                
+                <!-- Páginas do mestre -->
+                <div id="comandos-mestre-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <div id="cadastro-npcs-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <div id="cadastro-monstros-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <div id="cadastro-itens-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <div id="lore-personagens-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                
+                <!-- Páginas do admin -->
+                <div id="backoffice-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <div id="backups-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <div id="cadastro-constelacoes-content" class="tab-content hidden h-full flex flex-col p-0 overflow-hidden"></div>
+                <div id="cadastro-craft-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <div id="cadastro-deuses-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <div id="cadastro-ego-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <div id="cadastro-lojas-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <div id="cadastro-noticias-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <div id="cadastro-pets-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <div id="cadastro-reputacao-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <div id="firebase-muda-all-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <div id="firebase-muda-if-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <div id="gerar-tabela-xp-content" class="tab-content hidden h-full flex flex-col p-0"></div>
+                <!-- <div id="mapa-mundial-content" class="tab-content hidden h-full flex flex-col p-0"></div> -->
+                <div id="mapa-mundial-content" class="tab-content hidden h-full flex flex-col p-0 overflow-hidden"></div>
+
+            </main>
+        </div>
+    </div>
+
+    <script type="module" src="js/main.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            setInterval(() => {
+                if (!window.globalState) return;
+                
+                const charData = window.globalState.selectedCharacterData;
+                if (charData && charData.ficha) {
+                    document.getElementById('sidebar-char-name').textContent = charData.ficha.nome || 'Sem Nome';
+                    document.getElementById('sidebar-player-name').textContent = `Jogador: ${charData.ficha.jogador || 'N/A'}`;
+                    document.getElementById('sidebar-char-class').textContent = charData.classe?.nome || 'Sem Classe';
+                    document.getElementById('sidebar-char-subclass').textContent = charData.subclasse?.nome || 'Sem Subc.';
+                    
+                    const imgKey = charData.ficha.imagemPrincipal;
+                    const imgUrl = (imgKey && charData.ficha.imageUrls && charData.ficha.imageUrls[imgKey]) 
+                                   ? charData.ficha.imageUrls[imgKey] 
+                                   : (charData.ficha.imagemUrl || 'https://placehold.co/400x400/0f172a/d4af37?text=Sem+Foto');
+                    document.getElementById('sidebar-char-img').src = imgUrl;
+                } else {
+                    document.getElementById('sidebar-char-name').textContent = '---';
+                    document.getElementById('sidebar-player-name').textContent = '---';
+                    document.getElementById('sidebar-char-class').textContent = '---';
+                    document.getElementById('sidebar-char-subclass').textContent = '---';
+                    document.getElementById('sidebar-char-img').src = 'https://placehold.co/400x400/0f172a/d4af37?text=Sem+Foto';
+                }
+
+                const w = window.globalState.world?.data || {};
+                let timeDisplay = w.time || '--:--';
+                if (window.globalState.activeSessionId && window.globalState.activeSessionId !== 'world') {
+                    const sess = window.globalState.userSessions?.find(s => s.id === window.globalState.activeSessionId);
+                    if (sess && sess.customTime) timeDisplay = sess.customTime;
+                }
+                document.getElementById('sidebar-world-time').textContent = timeDisplay;
+
+                const locId = window.globalState.world?.selectedLocId;
+                const loc = window.globalState.world?.locations?.find(l => l.id === locId);
+                document.getElementById('sidebar-location').textContent = loc ? loc.name : 'Desconhecida';
+
+                const events = window.globalState.world?.events || [];
+                let weather = 'Céu Limpo';
+                let isDanger = false;
+                if (loc && loc.x !== undefined && loc.y !== undefined) {
+                    const localEvents = events.filter(ev => {
+                        const distance = Math.sqrt(Math.pow(loc.x - ev.x, 2) + Math.pow(loc.y - ev.y, 2));
+                        return distance <= (ev.radius || 0);
+                    });
+                    if (localEvents.length > 0) { weather = localEvents[0].name; isDanger = true; }
+                }
+                const wEl = document.getElementById('sidebar-weather');
+                if(wEl) {
+                    wEl.textContent = weather;
+                    wEl.className = `text-[10px] font-mono truncate block mt-0.5 ${isDanger ? 'text-red-400 animate-pulse' : 'text-emerald-400'}`;
+                }
+
+            }, 1000); 
+        });
+    </script>
+</body>
+</html>

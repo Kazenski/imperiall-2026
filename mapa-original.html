@@ -1,0 +1,1559 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mapa Mundial Original</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-storage-compat.js"></script>
+
+    <link rel="stylesheet" href="style.css" />
+
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+
+
+</head>
+<body>
+    <div id="root" class="h-screen w-screen"></div>
+
+<script type="text/babel">
+        // --- FIREBASE SETUP ---
+        const firebaseConfig = { 
+            apiKey: "AIzaSyDLvrHJrPvmqR5PTbn4B9FZO2nIt0iTTU0", 
+            authDomain: "kazenski-a1bb2.firebaseapp.com", 
+            projectId: "kazenski-a1bb2", 
+            storageBucket: "kazenski-a1bb2.firebasestorage.app" 
+        };
+        
+        if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        const { increment } = firebase.firestore.FieldValue;
+
+        // --- CONSTANTES ---
+        const WORLD_MAP_URL = "https://firebasestorage.googleapis.com/v0/b/kazenski-a1bb2.firebasestorage.app/o/imagens_rpg%2FJna1SPdTpRYoo5jGrzZUem.jpg?alt=media";
+        const MAP_W = 2048;
+        const MAP_H = 1536; 
+
+        const COLS = {
+            LOCATIONS: 'rpg_locations',
+            ROUTES: 'rpg_routes',
+            ROUTE_TYPES: 'rpg_route_types',
+            EVENTS: 'rpg_events',
+            ISOLATED: 'rpg_isolated_encounters',
+            SEASONS: 'rpg_seasons',
+            WORLD: 'rpg_world_state',
+            NPCS: 'rpg_Npcs',
+            GROUPS: 'rpg_group_locations',
+            DUNGEONS: 'rpg_dungeons',
+            MONSTERS: 'rpg_fichasNPCMonstros',
+            ITEMS: 'rpg_itensCadastrados',
+            ITEMS_BAG: 'rpg_itensMochila',
+            PLAYERS: 'rpg_fichas',
+            SESSIONS: 'rpg_sessions',
+            PLAYERS: 'rpg_fichas'
+        };
+
+        const EVENT_ICONS = [
+            'Zap', 'Skull', 'Flame', 'Droplets', 'Wind', 
+            'Snowflake', 'Sun', 'Moon', 'Star', 'Cloud', 
+            'CloudRain', 'CloudLightning', 'Tornado', 'Waves', 'Mountain', 
+            'Tent', 'Flag', 'Sword', 'Shield', 'Anchor'
+        ];
+
+        // Novos ícones mais elaborados para rotas (SVG Puro)
+        const ROUTE_ICONS_PRESETS = [
+            { id: 'npc', name: 'NPC / Personagem', icon: 'User' },
+            { id: 'guild', name: 'Rota da Guilda', icon: 'Shield' },
+            { 
+                id: 'ship', name: 'Transporte Marítimo (Vela)', 
+                svg: '<path d="M2 20a2.4 2.4 0 0 0 2 1a2.4 2.4 0 0 0 2 1a2.4 2.4 0 0 0 2 -1a2.4 2.4 0 0 0 2 1a2.4 2.4 0 0 0 2 -1a2.4 2.4 0 0 0 2 1a2.4 2.4 0 0 0 2 1a2.4 2.4 0 0 0 2 -1"/><path d="M4 18l-1 -3h18l-1 3"/><path d="M11 12h7l-7 -8v8"/><path d="M8 7l-2 5"/>' 
+            },
+            { 
+                id: 'cargo', name: 'Comércio Marítimo (Carga)', 
+                svg: '<path d="M2 20a2.4 2.4 0 0 0 2 1a2.4 2.4 0 0 0 2 1a2.4 2.4 0 0 0 2 -1a2.4 2.4 0 0 0 2 1a2.4 2.4 0 0 0 2 -1a2.4 2.4 0 0 0 2 1a2.4 2.4 0 0 0 2 -1"/><path d="M4 18l-1 -3h18l-1 3"/><rect x="8" y="11" width="8" height="4" rx="1" /><rect x="9" y="6" width="6" height="4" rx="1" />' 
+            },
+            { 
+                id: 'wagon', name: 'Transporte Terrestre (Carroça)', 
+                svg: '<circle cx="6" cy="17" r="3" /><circle cx="16" cy="17" r="3" /><path d="M14 17h-4"/><path d="M4 17h-2v-11a1 1 0 0 1 1 -1h14v12h-1"/><path d="M9 5v-1h4v1"/>' 
+            },
+            { 
+                id: 'wagon_trade', name: 'Comércio Terrestre (Mercadorias)', 
+                svg: '<circle cx="6" cy="17" r="3" /><circle cx="16" cy="17" r="3" /><path d="M14 17h-4"/><path d="M4 17h-2v-11a1 1 0 0 1 1 -1h14v12h-1"/><rect x="7" y="8" width="8" height="5" rx="1" fill="currentColor" opacity="0.5"/>' 
+            }
+        ];
+
+        // --- UTILS ---
+        const Icon = ({ name, size = 18, className = "" }) => {
+            const iconRef = React.useRef(null);
+
+            React.useEffect(() => {
+                if (window.lucide && iconRef.current) {
+                    // Limpa o conteúdo anterior para evitar duplicidade ou erros de remoção
+                    iconRef.current.innerHTML = ''; 
+                    
+                    // Cria o elemento de ícone dinamicamente
+                    const i = document.createElement('i');
+                    i.setAttribute('data-lucide', name);
+                    i.style.width = `${size}px`;
+                    i.style.height = `${size}px`;
+                    if (className) i.className = className;
+                    
+                    iconRef.current.appendChild(i);
+                    window.lucide.createIcons({
+                        nodes: [i]
+                    });
+                }
+            }, [name, size, className]);
+
+            // Usamos uma tag span como container estável para o React
+            return <span ref={iconRef} className="inline-flex items-center justify-center"></span>;
+        };
+
+
+
+
+        // Helper para gerar SVG do Lucide (para Leaflet) sem erro de toSvg
+        const getIconSvg = (iconName, color, size = 24) => {
+            try {
+                if (window.lucide && window.lucide.icons && window.lucide.icons[iconName]) {
+                    const iconDef = window.lucide.icons[iconName];
+                    
+                    // Se for um array (nova versão Lucide)
+                    if (Array.isArray(iconDef)) {
+                         let innerSvg = '';
+                         iconDef.forEach(([tag, attrs]) => {
+                             const attrString = Object.entries(attrs)
+                                 .map(([k, v]) => `${k}="${v}"`)
+                                 .join(' ');
+                             innerSvg += `<${tag} ${attrString}></${tag}>`;
+                         });
+                         return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${innerSvg}</svg>`;
+                    }
+
+                    // Se for objeto com toSvg (versão antiga)
+                    if (typeof iconDef.toSvg === 'function') {
+                        return iconDef.toSvg({ color: color, width: size, height: size, "stroke-width": 2 });
+                    }
+                }
+            } catch (e) {
+                console.warn("Erro ao renderizar ícone:", iconName, e);
+            }
+            // Fallback robusto
+            return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><text x="12" y="16" text-anchor="middle" fill="${color}" font-size="12">!</text></svg>`;
+        };
+
+        const getPointAndBearing = (points, progress) => {
+            if (!points || points.length < 2) return null;
+            const loopProgress = progress % 1;
+            let totalDist = 0;
+            const dists = [];
+            for (let i = 0; i < points.length - 1; i++) {
+                const d = Math.sqrt(Math.pow(points[i+1].lat - points[i].lat, 2) + Math.pow(points[i+1].lng - points[i].lng, 2));
+                dists.push(d);
+                totalDist += d;
+            }
+            let targetDist = totalDist * loopProgress;
+            let currentDist = 0;
+            for (let i = 0; i < dists.length; i++) {
+                if (currentDist + dists[i] >= targetDist) {
+                    const segmentProgress = (targetDist - currentDist) / dists[i];
+                    const p1 = points[i];
+                    const p2 = points[i+1];
+                    const lat = p1.lat + (p2.lat - p1.lat) * segmentProgress;
+                    const lng = p1.lng + (p2.lng - p1.lng) * segmentProgress;
+                    const dy = p2.lat - p1.lat;
+                    const dx = p2.lng - p1.lng;
+                    let theta = Math.atan2(dy, dx) * (180 / Math.PI);
+                    return { lat, lng, angle: theta };
+                }
+                currentDist += dists[i];
+            }
+            return { ...points[points.length - 1], angle: 0 };
+        };
+
+        const getDungeonTier = (createdDay, currentDay) => {
+            const diff = Math.max(0, currentDay - (createdDay || 0));
+            return Math.floor(diff / 2) % 3; 
+        };
+
+        const getTierColorClass = (tier) => {
+            if (tier === 1) return 'tier-int'; 
+            if (tier === 2) return 'tier-adv';
+            return 'tier-basic';
+        };
+
+        // --- LUNAR LOGIC ---
+        const MOON_PHASES = [
+            { name: "Lua Nova", icon: "circle", color: "#1e293b" },
+            { name: "Lua Crescente", icon: "moon", color: "#94a3b8" },
+            { name: "Quarto Crescente", icon: "moon", color: "#cbd5e1" },
+            { name: "Lua Gibosa", icon: "circle", color: "#e2e8f0" },
+            { name: "Lua Cheia", icon: "circle", color: "#ffffff" },
+            { name: "Lua Disseminadora", icon: "circle", color: "#e2e8f0" },
+            { name: "Quarto Minguante", icon: "moon", color: "#cbd5e1" },
+            { name: "Lua Minguante", icon: "moon", color: "#94a3b8" },
+            { name: "Eclipse", icon: "eclipse", color: "#ef4444" },
+            { name: "Convergência Lunar", icon: "sparkles", color: "#a855f7" }
+        ];
+
+        const getLunarState = (day, month, year) => {
+            const totalDays = (year * 360) + (month * 30) + day;
+            if (totalDays % 360 === 0) return { ...MOON_PHASES[9], daysToNext: 360 }; 
+            if (totalDays % 180 === 0) return { ...MOON_PHASES[8], daysToNext: 180 }; 
+            const cycleDay = totalDays % 28;
+            const phaseIndex = Math.floor(cycleDay / 3.5); 
+            const nextPhaseDay = ((phaseIndex + 1) * 3.5);
+            const daysToNext = Math.ceil(nextPhaseDay - cycleDay);
+            return { ...MOON_PHASES[phaseIndex], daysToNext };
+        };
+
+        // --- COMPONENTE MODAL GLOBAL ---
+        const Modal = ({ type, message, title, content, onConfirm, onClose }) => {
+            return (
+                <div className="custom-modal-overlay animate-fade-in" onClick={onClose}>
+                    <div className={`bg-slate-900 border border-slate-700 p-6 rounded-lg shadow-2xl relative flex flex-col ${type === 'picker' ? 'w-full max-w-3xl h-[80vh]' : 'max-w-sm w-full'}`} onClick={e => e.stopPropagation()}>
+                        <div className="flex justify-between items-center mb-4 border-b border-slate-800 pb-3">
+                            <h3 className={`text-xl font-bold font-serif ${type === 'alert' ? 'text-amber-500' : (type === 'confirm' ? 'text-blue-400' : 'text-slate-200')}`}>
+                                {title || (type === 'alert' ? 'Aviso' : 'Confirmação')}
+                            </h3>
+                            <button onClick={onClose} className="text-slate-500 hover:text-white p-1 rounded hover:bg-slate-800 transition"><Icon name="x" /></button>
+                        </div>
+                        {message && <p className="text-slate-300 mb-6 whitespace-pre-wrap leading-relaxed">{message}</p>}
+                        {content && <div className="flex-1 overflow-hidden flex flex-col">{content}</div>}
+                        {(type === 'alert' || type === 'confirm') && (
+                            <div className="flex justify-end gap-3 mt-auto pt-4 border-t border-slate-800">
+                                {type === 'confirm' && <button onClick={onClose} className="px-4 py-2 rounded bg-slate-700 hover:bg-slate-600 text-white font-bold transition">Cancelar</button>}
+                                <button onClick={() => { if(onConfirm) onConfirm(); onClose(); }} className={`px-4 py-2 rounded text-white font-bold transition ${type === 'alert' ? 'bg-amber-600 hover:bg-amber-500' : 'bg-blue-600 hover:bg-blue-500'}`}>
+                                    {type === 'confirm' ? 'Confirmar' : 'OK'}
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // --- COMPONENTE ITEM PICKER ---
+        const ItemPicker = ({ items, onSelect }) => {
+            const [search, setSearch] = React.useState('');
+            const filteredItems = items.filter(i => (i.nome || i.name || '').toLowerCase().includes(search.toLowerCase()));
+            return (
+                <div className="flex flex-col h-full">
+                    <div className="relative mb-4">
+                        <Icon name="search" size={16} className="absolute left-3 top-3 text-slate-500"/>
+                        <input type="text" placeholder="Buscar item na Mochila ou Cadastro..." value={search} onChange={e => setSearch(e.target.value)} className="w-full p-2 pl-10 bg-slate-800 border border-slate-600 rounded text-white focus:border-amber-500 outline-none" autoFocus />
+                    </div>
+                    <div className="picker-grid">
+                        {filteredItems.map(item => (
+                            <div key={item.id} className="picker-item group" onClick={() => onSelect(item)} title={item.nome}>
+                                {item.imagemUrl ? ( <div className="w-full h-full bg-cover bg-center rounded-t" style={{backgroundImage: `url('${item.imagemUrl}')`}} /> ) : ( <div className="w-full h-full flex items-center justify-center bg-slate-800 rounded-t"><Icon name="box" className="text-slate-600" /></div> )}
+                                <div className="picker-name">{item.nome}</div>
+                            </div>
+                        ))}
+                        {filteredItems.length === 0 && <div className="col-span-full text-center text-slate-500 py-10 italic">Nenhum item encontrado.</div>}
+                    </div>
+                </div>
+            );
+        };
+
+        // --- COMPONENTE EDITOR DE PASSES ---
+        const PassesEditor = ({ passes = [], items, onUpdate, openPicker }) => {
+            return (
+                <div className="space-y-3">
+                    <button type="button" onClick={openPicker} className="w-full bg-cyan-700 hover:bg-cyan-600 text-white py-2 rounded text-sm font-bold flex items-center justify-center gap-2 mb-4">
+                        <Icon name="key" size={16}/> Adicionar Item de Acesso
+                    </button>
+                    {passes.map((pass, idx) => {
+                        const item = items.find(i => i.id === pass.itemId);
+                        return (
+                            <div key={idx} className="bg-slate-800 p-3 rounded flex items-center gap-3 border border-slate-700">
+                                <div className="w-10 h-10 bg-slate-900 rounded border border-slate-600 bg-cover bg-center shrink-0" style={{backgroundImage: `url('${item?.imagemUrl || ''}')`}}></div>
+                                <div className="flex-1">
+                                    <div className="text-xs text-slate-400">Nome do Passe</div>
+                                    <input value={pass.name || ''} onChange={(e) => { const newPasses = [...passes]; newPasses[idx].name = e.target.value; onUpdate(newPasses); }} className="bg-transparent border-b border-slate-600 w-full text-sm text-white focus:border-cyan-500 outline-none" placeholder="Ex: Chave do Portão Norte" />
+                                </div>
+                                <button onClick={() => { const newPasses = passes.filter((_, i) => i !== idx); onUpdate(newPasses); }} className="text-red-500 hover:text-red-400"><Icon name="trash" size={16}/></button>
+                            </div>
+                        )
+                    })}
+                    {passes.length === 0 && <div className="text-center text-slate-500 text-xs italic py-4">Nenhum passe configurado. Acesso livre?</div>}
+                </div>
+            );
+        };
+
+        // --- GLOBAL MAP COMPONENT (DEFINED ONCE HERE) ---
+        const RPGMap = ({ 
+            mode = 'view', locations = [], routes = [], events = [], isolated = [], groups = [], npcs = [], dungeons = [], routeTypes = {}, worldTime = 0, worldDay = 1, 
+            onMapClick, onHexClick, 
+            tempPoints = [], tempPoint = null, tempRadius = 0, filters = {}, 
+            revealedHexes = [] // Array de IDs ['10-5', '10-6']
+        }) => {
+            const mapRef = React.useRef(null);
+            const mapInstance = React.useRef(null);
+            const layersRef = React.useRef({ markers: [], lines: [], circles: [], movers: [], isolated: [], groups: [], dungeons: [], events: [], hexes: [] });
+            
+            // Refs de callback para garantir estado atualizado dentro do Leaflet
+            const handlersRef = React.useRef({ click: onMapClick, hexClick: onHexClick });
+
+            // --- CONFIGURAÇÃO SUPER JUMBO HEX GRID ---
+            // Raio menor = Mais hexágonos = Mais precisão "tipo pincel"
+            const HEX_RADIUS = 10; 
+			const HEX_H = HEX_RADIUS * 2;
+			const HEX_W = Math.sqrt(3) * HEX_RADIUS;
+			const VERT_DIST = HEX_H * 0.75;
+
+			// Novos ícones mais elaborados para rotas, expandido para 20 opções (Ponto 5)
+			const ROUTE_ICONS_PRESETS = [
+				{ id: 'npc', name: 'NPC / Personagem', icon: 'user' },
+				{ id: 'guild', name: 'Rota da Guilda', icon: 'shield' },
+				{ id: 'ship', name: 'Transporte Marítimo', icon: 'anchor' }, 
+				{ id: 'cargo', name: 'Comércio/Caravana', icon: 'coins' },
+				{ id: 'wagon', name: 'Carroça Padrão', icon: 'truck' }, 
+				{ id: 'magic', name: 'Fluxo Mágico', icon: 'wand' },
+				{ id: 'beast', name: 'Trilha de Feras', icon: 'paw-print' },
+				{ id: 'royal', name: 'Rota Real', icon: 'crown' },
+				{ id: 'scout', name: 'Batedores', icon: 'footprints' },
+				{ id: 'religion', name: 'Peregrinação', icon: 'cross' },
+				{ id: 'military', name: 'Patrulha Militar', icon: 'swords' },
+				{ id: 'messenger', name: 'Mensageiro Express', icon: 'mail' },
+				{ id: 'border', name: 'Fronteira', icon: 'map-pin' },
+				{ id: 'nature', name: 'Trilha Natural', icon: 'leaf' },
+				{ id: 'underground', name: 'Túneis Escuros', icon: 'pickaxe' },
+				{ id: 'flight', name: 'Rota Aérea', icon: 'bird' },
+				{ id: 'watch', name: 'Ronda de Vigília', icon: 'eye' },
+				{ id: 'camp', name: 'Acampamento Nômade', icon: 'tent' },
+				{ id: 'hidden', name: 'Trilha Oculta', icon: 'ghost' },
+				{ id: 'danger', name: 'Rota Perigosa', icon: 'skull' }
+			];
+
+            React.useEffect(() => { 
+                handlersRef.current = { click: onMapClick, hexClick: onHexClick }; 
+            }, [onMapClick, onHexClick]);
+
+            // Matemática do Hexágono
+            const getHexCorners = (centerX, centerY) => {
+                const corners = [];
+                for (let i = 0; i < 6; i++) {
+                    const angle_deg = 60 * i - 30;
+                    const angle_rad = Math.PI / 180 * angle_deg;
+                    corners.push([
+                        centerY + HEX_RADIUS * Math.sin(angle_rad),
+                        centerX + HEX_RADIUS * Math.cos(angle_rad)
+                    ]);
+                }
+                return corners;
+            };
+
+            // Inicialização do Mapa
+            React.useEffect(() => {
+                if (!mapRef.current || mapInstance.current) return;
+                try {
+                    // preferCanvas: true é OBRIGATÓRIO para desenhar milhares de hexágonos sem travar
+                    const map = L.map(mapRef.current, { crs: L.CRS.Simple, minZoom: -2, maxZoom: 2, zoomControl: false, attributionControl: false, preferCanvas: true });
+                    const bounds = [[0,0], [MAP_H, MAP_W]];
+                    L.imageOverlay(WORLD_MAP_URL, bounds).addTo(map);
+                    map.fitBounds(bounds);
+                    mapInstance.current = map;
+                    
+                    map.on('click', (e) => { 
+                        if (handlersRef.current.click) handlersRef.current.click({ lat: e.latlng.lat, lng: e.latlng.lng }); 
+                    });
+
+                    setTimeout(() => map.invalidateSize(), 500);
+                } catch (err) { console.error("Map error", err); }
+            }, []);
+
+            // Renderização das Camadas
+            React.useEffect(() => {
+				if (!mapInstance.current) return;
+				const map = mapInstance.current;
+				
+				// Limpeza segura
+				const layers = layersRef.current;
+				Object.keys(layers).forEach(key => {
+					if (layers[key] && Array.isArray(layers[key])) {
+						layers[key].forEach(l => map.removeLayer(l));
+						layers[key] = [];
+					}
+				});
+
+                // 1. GRID HEXAGONAL (LÓGICA FOG OF WAR - Mantida com Otimização)
+				if (revealedHexes !== undefined && mode === 'view') {
+					const hexRenderer = L.canvas({ padding: 0.5 });
+					const cols = Math.ceil(MAP_W / HEX_W) + 2;
+					const rows = Math.ceil(MAP_H / VERT_DIST) + 2;
+
+					for (let r = 0; r < rows; r++) {
+						for (let c = 0; c < cols; c++) {
+							const xOffset = (r % 2 === 1) ? HEX_W / 2 : 0;
+							const centerX = (c * HEX_W) + xOffset - (HEX_W/2);
+							const centerY = (r * VERT_DIST) - (HEX_H/2);
+							
+							if (centerX < -HEX_RADIUS || centerX > MAP_W + HEX_RADIUS || centerY < -HEX_RADIUS || centerY > MAP_H + HEX_RADIUS) continue;
+
+							const hexId = `${r}-${c}`;
+							const isRevealed = revealedHexes.includes(hexId);
+							const corners = getHexCorners(centerX, centerY);
+
+							const poly = L.polygon(corners, {
+								renderer: hexRenderer,
+								color: isRevealed ? 'rgba(74, 222, 128, 0.3)' : 'rgba(0,0,0,0.2)',
+								weight: 1,
+								fillColor: isRevealed ? '#4ade80' : '#1e293b',
+								fillOpacity: isRevealed ? 0.25 : 0.6,
+								interactive: true 
+							}).addTo(map);
+
+							poly.on('mousedown', (e) => {
+								L.DomEvent.stopPropagation(e); 
+								if (handlersRef.current.hexClick) handlersRef.current.hexClick(hexId);
+							});
+							layers.hexes.push(poly);
+						}
+					}
+				}
+
+
+                // 2. LOCAIS (CIDADES) - Ponto 3 (População adicionada)
+				if (filters.locations) {
+					locations.forEach(loc => {
+						if (loc.y && loc.x) {
+							const icon = L.divIcon({ className: 'custom-div-icon', html: `<div class="bg-amber-600 w-4 h-4 rounded-full border-2 border-white shadow-lg hover:scale-150 transition-transform cursor-pointer"></div>`, iconSize: [16, 16] });
+							const popText = loc.pop ? `<br><span style="color:#fbbf24">População: ${loc.pop}</span>` : '';
+							const m = L.marker([loc.y, loc.x], { icon, zIndexOffset: 10000 }).bindPopup(`<b>${loc.name}</b><br><span style="color:#94a3b8">${loc.type}</span>${popText}`).addTo(map);
+							layers.markers.push(m);
+						}
+					});
+				}
+
+                // 3. DUNGEONS - Ponto 2 (Ícone de porta/castelo, cores por dificuldade e detalhes)
+				if (filters.dungeons) {
+					dungeons.forEach(d => {
+						if (d.y && d.x) {
+							const diffColors = { 1: '#94a3b8', 2: '#4ade80', 3: '#60a5fa', 4: '#c084fc', 5: '#fbbf24' }; // 1 a 5
+							const color = diffColors[d.difficulty || 1] || '#94a3b8';
+							const isActive = d.isActive !== false;
+							
+							const iconHtml = getIconSvg('door-open', '#000', 20); // Porta preta vazada
+							const html = `<div class="dungeon-marker" style="opacity:${isActive?1:0.5}; background:${color}; width:32px; height:32px; border-radius:6px; display:flex; align-items:center; justify-content:center; border:2px solid black; box-shadow: 0 4px 6px rgba(0,0,0,0.5);">${iconHtml}</div>`;
+							const icon = L.divIcon({ className: 'custom-div-icon', html, iconSize: [32, 32] });
+							
+							const m = L.marker([d.y, d.x], { icon, zIndexOffset: 9000 }).bindPopup(`<b>${d.name}</b><hr style="border-color:#334155; margin:4px 0;"><span style="color:#fbbf24">Dificuldade: ${d.difficulty||1}</span><br><span style="color:#94a3b8">Andares: ${d.floors||1}</span><br><span style="color:#ef4444">Inimigos/Andar: ${d.baseEnemies||5}</span>`).addTo(map);
+							layers.dungeons.push(m);
+						}
+					});
+				}
+				
+				
+
+                // 4. ROTAS - Ponto 5 (Ícones ancorados na linha e popups)
+				if (filters.routes) {
+					routes.forEach(r => {
+						if (r.points && r.points.length > 1) {
+							const rType = routeTypes && r.typeId ? routeTypes[r.typeId] : null;
+							const lineColor = rType ? rType.color : 'white';
+							
+							// Desenha a linha
+							const line = L.polyline(r.points.map(p => [p.lat, p.lng]), { color: lineColor, weight: 2, opacity: 0.5, dashArray: '5, 10' }).addTo(map);
+							layers.lines.push(line);
+
+							// Coloca o ícone no meio da rota
+							const midPoint = r.points[Math.floor(r.points.length / 2)];
+							const svgIcon = rType ? getIconSvg(rType.icon || 'route', lineColor, 18) : getIconSvg('route', 'white', 18);
+							const iconHtml = `<div style="background:#0f172a; border:2px solid ${lineColor}; border-radius:50%; padding:4px; box-shadow:0 0 10px rgba(0,0,0,0.8);">${svgIcon}</div>`;
+							
+							const icon = L.divIcon({ className: 'custom-div-icon', html: iconHtml, iconSize: [30, 30] });
+							const m = L.marker([midPoint.lat, midPoint.lng], { icon }).bindPopup(`<b>${r.name}</b><br><span style="color:${lineColor}">${rType?.name || 'Rota'}</span><br>Duração Ciclo: ${r.duration||0} min`).addTo(map);
+							layers.markers.push(m);
+						}
+					});
+				}
+
+
+
+                // 5. EVENTOS - Ponto 7 (Ícone centralizado com popup detalhado)
+				if (filters.events) {
+					events.forEach(ev => {
+						if (ev.y && ev.x && ev.isActive !== false) {
+							// Círculo de alcance
+							const c = L.circle([ev.y, ev.x], { radius: ev.radius || 100, color: ev.color || 'purple', fillColor: ev.color || 'purple', fillOpacity: 0.15 }).addTo(map);
+							layers.circles.push(c);
+
+							// Ícone Central
+							const svgIcon = getIconSvg(ev.icon || 'zap', 'white', 20);
+							const iconHtml = `<div style="background:${ev.color || 'purple'}; border-radius:50%; padding:6px; box-shadow: 0 0 15px ${ev.color || 'purple'}; border:2px solid #fff;">${svgIcon}</div>`;
+							const icon = L.divIcon({ className: 'custom-div-icon', html: iconHtml, iconSize: [36, 36] });
+							
+							const m = L.marker([ev.y, ev.x], { icon, zIndexOffset: 8000 }).bindPopup(`<b>${ev.name}</b><br><span style="color:#fbbf24">Chance: ${ev.chance||0}%</span><br><span style="color:#94a3b8">Duração: ${ev.minDuration||1} a ${ev.maxDuration||1} dias</span>`).addTo(map);
+							layers.markers.push(m);
+						}
+					});
+				}
+
+
+				
+				// 6. ENCONTROS ISOLADOS (BASE - Desbotados) - Ponto 8
+				if (filters.isolated) {
+					isolated.forEach(iso => {
+						if (iso.spots) {
+							iso.spots.forEach(spot => {
+								// Ícone cinza e desbotado por padrão
+								const svgIcon = getIconSvg('sword', '#94a3b8', 16);
+								const iconHtml = `<div style="background:#1e293b; border:2px solid #94a3b8; border-radius:50%; padding:5px; opacity:0.6; filter:grayscale(100%); transition: all 0.3s;">${svgIcon}</div>`;
+								const icon = L.divIcon({ className: 'custom-div-icon', html: iconHtml, iconSize: [30, 30] });
+								const m = L.marker([spot.lat, spot.lng], { icon }).bindPopup(`<b>${iso.name}</b><br><span style="color:#94a3b8">${iso.desc || 'Local de encontro'}</span>`).addTo(map);
+								layers.isolated.push(m);
+							});
+						}
+					});
+				}
+				
+				
+				
+                // LINHAS E PONTOS VIBRANTES (Edição de Rotas ou Encontros Selecionados) - Ponto 8
+				if (tempPoints.length > 0) {
+					if (mode === 'isolated') {
+						// Pontos Vibrantes de Encontro em Edição/Selecionado
+						tempPoints.forEach(p => {
+							const svgIcon = getIconSvg('sword', '#ef4444', 20);
+							const iconHtml = `<div style="background:#450a0a; border:2px solid #ef4444; border-radius:50%; padding:6px; box-shadow: 0 0 20px rgba(239, 68, 68, 0.8); z-index:9999;">${svgIcon}</div>`;
+							const icon = L.divIcon({ className: 'custom-div-icon', html: iconHtml, iconSize: [36, 36] });
+							layers.markers.push(L.marker([p.lat, p.lng], { icon, zIndexOffset: 10000 }).addTo(map));
+						});
+					} else {
+						// Lógica padrão de desenho de linha para Rotas e Grupos
+						const color = mode === 'group' ? (filters.editingColor || 'cyan') : 'yellow';
+						layers.lines.push(L.polyline(tempPoints.map(p => [p.lat, p.lng]), { color, dashArray: '5,5', weight: 3 }).addTo(map));
+						tempPoints.forEach(p => {
+							layers.markers.push(L.circleMarker([p.lat, p.lng], { radius: 5, color, fillColor: 'black', fillOpacity: 1 }).addTo(map));
+						});
+					}
+				}
+
+			}, [locations, routes, dungeons, events, isolated, groups, npcs, filters, tempPoint, tempPoints, tempRadius, worldTime, worldDay, revealedHexes]);
+
+            return <div ref={mapRef} className="w-full h-full bg-slate-950 block min-h-[500px]"></div>;
+        };
+
+        // --- MODULES DEFINITIONS ---
+
+        const GlobalMapModule = () => {
+            const [data, setData] = React.useState({ locations: [], routes: [], events: [], isolated: [], groups: [], dungeons: [], types: {}, state: {}, npcs: [] });
+            const [filters, setFilters] = React.useState({ locations: true, routes: true, events: true, npcs: true, groups: true, dungeons: true });
+
+            React.useEffect(() => {
+                const unsubs = [
+                    db.collection(COLS.LOCATIONS).onSnapshot(s => setData(p => ({...p, locations: s.docs.map(d => d.data())}))),
+                    db.collection(COLS.ROUTES).onSnapshot(s => setData(p => ({...p, routes: s.docs.map(d => d.data())}))),
+                    db.collection(COLS.EVENTS).onSnapshot(s => setData(p => ({...p, events: s.docs.map(d => d.data())}))),
+                    db.collection(COLS.ISOLATED).onSnapshot(s => setData(p => ({...p, isolated: s.docs.map(d => d.data())}))),
+                    db.collection(COLS.GROUPS).onSnapshot(s => setData(p => ({...p, groups: s.docs.map(d => d.data())}))),
+                    db.collection(COLS.DUNGEONS).onSnapshot(s => setData(p => ({...p, dungeons: s.docs.map(d => d.data())}))),
+                    db.collection(COLS.NPCS).onSnapshot(s => setData(p => ({...p, npcs: s.docs.map(d => ({id: d.id, ...d.data()}))}))),
+                    db.collection(COLS.ROUTE_TYPES).onSnapshot(s => { const t={}; s.docs.forEach(d=>t[d.id]=d.data()); setData(p=>({...p, types:t})); }),
+                    db.collection(COLS.WORLD).doc('main').onSnapshot(d => setData(p => ({...p, state: d.data() || {}})))
+                ];
+                return () => unsubs.forEach(u => u());
+            }, []);
+
+            const tm = ((data.state.day||1)*1440) + (parseInt((data.state.time||"00:00").split(':')[0])*60) + parseInt((data.state.time||"00:00").split(':')[1]);
+
+            return (
+                <div className="flex-1 relative flex flex-col min-h-[1000px]">
+                    <div className="sticky top-20 right-4 z-[1000] bg-slate-900/90 p-3 rounded border border-slate-700 shadow-xl backdrop-blur w-64 ml-auto mr-4 mt-4">
+                        <div className="text-xs font-bold text-amber-500 mb-2 uppercase">Camadas</div>
+                        <div className="flex flex-col gap-2">
+                            <label className="flex items-center gap-2 text-slate-300 text-sm cursor-pointer"><input type="checkbox" checked={filters.locations} onChange={e => setFilters({...filters, locations: e.target.checked})} /> Locais</label>
+                            <label className="flex items-center gap-2 text-slate-300 text-sm cursor-pointer"><input type="checkbox" checked={filters.dungeons} onChange={e => setFilters({...filters, dungeons: e.target.checked})} /> Dungeons</label>
+                            <label className="flex items-center gap-2 text-slate-300 text-sm cursor-pointer"><input type="checkbox" checked={filters.routes} onChange={e => setFilters({...filters, routes: e.target.checked})} /> Rotas</label>
+                            {/* <label className="flex items-center gap-2 text-slate-300 text-sm cursor-pointer"><input type="checkbox" checked={filters.groups} onChange={e => setFilters({...filters, groups: e.target.checked})} /> Grupos & Histórico</label> */}
+                            <label className="flex items-center gap-2 text-slate-300 text-sm cursor-pointer"><input type="checkbox" checked={filters.npcs} onChange={e => setFilters({...filters, npcs: e.target.checked})} /> Viajantes</label>
+                            <label className="flex items-center gap-2 text-slate-300 text-sm cursor-pointer"><input type="checkbox" checked={filters.events} onChange={e => setFilters({...filters, events: e.target.checked})} /> Eventos</label>
+                        </div>
+                        <div className="mt-3 pt-3 border-t border-slate-700 text-[10px] text-slate-500 text-center font-mono">
+                            {data.state.day}/{data.state.month}/{data.state.year} - {data.state.time}
+                        </div>
+                    </div>
+                    <div className="absolute inset-0 z-0">
+                         <RPGMap locations={data.locations} routes={data.routes} events={data.events} isolated={data.isolated} groups={data.groups} npcs={data.npcs} dungeons={data.dungeons} routeTypes={data.types} filters={filters} worldTime={tm} worldDay={data.state.day||1} />
+                    </div>
+                </div>
+            );
+        };
+
+        const LocationsModule = () => {
+            const [list, setList] = React.useState([]);
+            const [editing, setEditing] = React.useState(null);
+            const [activeTab, setActiveTab] = React.useState('basic');
+            React.useEffect(() => db.collection(COLS.LOCATIONS).orderBy('name').onSnapshot(s => setList(s.docs.map(d => ({id: d.id, ...d.data()})))), []);
+            const handleSave = async (e) => { e.preventDefault(); const fd = new FormData(e.target); const data = Object.fromEntries(fd.entries()); data.pop = parseInt(data.pop)||0; data.x = editing.x||0; data.y = editing.y||0; if(editing.id) await db.collection(COLS.LOCATIONS).doc(editing.id).update(data); else await db.collection(COLS.LOCATIONS).add(data); setEditing(null); };
+            return (
+                <div className="flex flex-row h-full relative">
+                    <div className="w-72 bg-slate-900 border-r border-slate-800 flex flex-col sticky top-14 h-[calc(100vh-3.5rem)] overflow-y-auto z-20">
+                        <div className="p-3 border-b border-slate-800 sticky top-0 bg-slate-900 z-10"><button onClick={() => setEditing({})} className="w-full bg-green-700 hover:bg-green-600 text-white py-3 rounded font-bold flex items-center justify-center gap-2 shadow-lg"><Icon name="plus" size={16} /> LOCAL</button></div>
+                        <div className="flex-1 p-2 space-y-1">{list.map(i => (<div key={i.id} onClick={() => setEditing(i)} className="p-3 rounded cursor-pointer hover:bg-slate-800 border border-transparent hover:border-slate-700 transition"><div className="font-bold text-slate-200">{i.name}</div><div className="text-xs text-slate-500 uppercase">{i.type}</div></div>))}</div>
+                    </div>
+                    <div className="flex-1 relative min-h-[1250px] bg-slate-950"><div className="absolute inset-0 z-0"><RPGMap mode="point" locations={list} tempPoint={editing?.x ? {lat: editing.y, lng: editing.x} : null} onMapClick={(pt) => editing && setEditing({...editing, x: pt.lng, y: pt.lat})} filters={{locations: true}} /></div>
+                        {editing && (
+                            <div className="sticky top-20 left-4 z-[500] w-[500px] max-h-[85vh] overflow-y-auto bg-slate-900/95 border border-slate-700 rounded-lg shadow-2xl flex flex-col backdrop-blur-md m-4">
+                                <div className="p-4 border-b border-slate-800 flex justify-between items-center"><h2 className="text-xl rpg-title text-amber-500">{editing.id ? 'Editar' : 'Criar'} Local</h2><button onClick={() => setEditing(null)} className="text-slate-500"><Icon name="x" size={18}/></button></div>
+                                <div className="flex px-4 mt-2 border-b border-slate-800 gap-2 overflow-x-auto shrink-0">{['basic','infra','society','conflicts'].map(id => (<button key={id} onClick={()=>setActiveTab(id)} className={`px-3 py-1 text-[10px] font-bold uppercase rounded-t ${activeTab===id?'bg-slate-800 text-amber-500 border-t border-x border-slate-700':'text-slate-500'}`}>{id}</button>))}</div>
+                                <form onSubmit={handleSave} className="p-6 space-y-5">{activeTab === 'basic' ? (<><label className="input-label">Nome</label><input name="name" defaultValue={editing.name} className="input-field text-lg" required /><label className="input-label">Tipo</label><select name="type" defaultValue={editing.type} className="input-field"><option>Cidade</option><option>Vila</option><option>Ruína</option><option>Capital</option><option>Ponto de Interesse</option></select><label className="input-label">População</label><input name="pop" type="number" defaultValue={editing.pop} className="input-field" /><label className="input-label">Descrição</label><textarea name="desc" defaultValue={editing.desc} rows="4" className="input-field"></textarea></>) : (<textarea name={activeTab} defaultValue={editing[activeTab]} rows="20" className="input-field w-full h-96"></textarea>)}<div className="flex gap-3"><button className="flex-1 bg-green-700 text-white py-2 rounded font-bold">SALVAR</button>{editing.id && <button type="button" onClick={() => {if(confirm('Del?')) db.collection(COLS.LOCATIONS).doc(editing.id).delete(); setEditing(null);}} className="bg-red-900 px-4 rounded text-white"><Icon name="trash"/></button>}</div></form>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const RoutesModule = () => {
+            const [routes, setRoutes] = React.useState([]); 
+            const [types, setTypes] = React.useState([]); 
+            const [npcs, setNpcs] = React.useState([]); 
+            const [editing, setEditing] = React.useState(null); 
+            const [tempPoints, setTempPoints] = React.useState([]); 
+            const [viewMode, setViewMode] = React.useState('list'); 
+            
+            React.useEffect(() => { 
+                const u1 = db.collection(COLS.ROUTES).onSnapshot(s => setRoutes(s.docs.map(d => ({id: d.id, ...d.data()})))); 
+                const u2 = db.collection(COLS.ROUTE_TYPES).onSnapshot(s => setTypes(s.docs.map(d => ({id: d.id, ...d.data()})))); 
+                const u3 = db.collection(COLS.NPCS).onSnapshot(s => { const loaded = s.docs.map(d => ({id: d.id, ...d.data()})); loaded.sort((a, b) => (a.nome || a.name || '').localeCompare(b.nome || b.name || '')); setNpcs(loaded); }); 
+                return () => { u1(); u2(); u3(); }; 
+            }, []);
+            
+            const saveRoute = async () => { 
+                if (!editing.name || tempPoints.length < 2) return alert("Min 2 pontos."); 
+                const data = { ...editing, points: tempPoints }; 
+                if(editing.id) await db.collection(COLS.ROUTES).doc(editing.id).update(data); 
+                else await db.collection(COLS.ROUTES).add(data); 
+                setEditing(null); setTempPoints([]); 
+            };
+
+            const addType = (e) => {
+                e.preventDefault();
+                db.collection(COLS.ROUTE_TYPES).add({
+                    name: e.target.name.value, 
+                    color: e.target.color.value,
+                    icon: 'Circle'
+                });
+                e.target.reset();
+            };
+
+            const updateTypeIcon = (typeId, preset) => {
+                const update = {
+                    icon: preset.icon ? preset.icon : firebase.firestore.FieldValue.delete(),
+                    svg: preset.svg ? preset.svg : firebase.firestore.FieldValue.delete()
+                };
+                db.collection(COLS.ROUTE_TYPES).doc(typeId).update(update);
+            };
+
+            return (
+                <div className="flex flex-row h-full relative">
+                    {viewMode === 'types' && (
+                        <div className="fixed inset-0 bg-slate-950/95 z-[2000] p-10 flex items-center justify-center">
+                            <div className="bg-slate-900 border border-slate-700 p-8 rounded-xl w-full max-w-2xl h-[80vh] overflow-y-auto">
+                                <div className="flex justify-between mb-6">
+                                    <h3 className="text-xl text-amber-500">Gerenciar Tipos de Rota</h3>
+                                    <button onClick={()=>setViewMode('list')}>X</button>
+                                </div>
+                                <div className="grid gap-4 mb-6">
+                                    {types.map(t => (
+                                        <div key={t.id} className="bg-slate-800 p-4 rounded flex flex-col gap-3 border border-slate-700">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-6 h-6 rounded-full shrink-0" style={{backgroundColor:t.color}}></div>
+                                                <span className="flex-1 font-bold text-lg">{t.name}</span>
+                                                <button onClick={()=>db.collection(COLS.ROUTE_TYPES).doc(t.id).delete()} className="text-red-500"><Icon name="trash" size={16}/></button>
+                                            </div>
+                                            
+                                            <div className="flex flex-wrap gap-2 mt-2">
+                                                {ROUTE_ICONS_PRESETS.map(p => {
+                                                    const isSelected = (t.icon && t.icon === p.icon) || (t.svg && t.svg === p.svg);
+                                                    return (
+                                                        <div 
+                                                            key={p.id} 
+                                                            onClick={() => updateTypeIcon(t.id, p)}
+                                                            className={`p-2 rounded border cursor-pointer flex items-center gap-2 transition-all ${ isSelected ? 'border-amber-500 bg-amber-900/30 text-amber-500 shadow-lg scale-105' : 'border-slate-600 bg-slate-900 opacity-70 hover:opacity-100' }`}
+                                                            title={p.name}
+                                                        >
+                                                            {p.svg ? (
+                                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" dangerouslySetInnerHTML={{__html: p.svg}}></svg>
+                                                            ) : (
+                                                                <Icon name={p.icon} size={16}/>
+                                                            )}
+                                                        </div>
+                                                    )
+                                                })}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <form onSubmit={addType} className="flex gap-2 bg-slate-800 p-4 rounded border border-slate-700 sticky bottom-0">
+                                    <input name="name" placeholder="Novo Tipo" className="input-field" required/>
+                                    <input name="color" type="color" className="h-10 w-10 bg-transparent border-none cursor-pointer"/>
+                                    <button className="bg-green-600 px-6 rounded text-white font-bold">Adicionar</button>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+                    <div className="w-72 bg-slate-900 border-r border-slate-800 flex flex-col sticky top-14 h-[calc(100vh-3.5rem)] overflow-y-auto z-20">
+                        <div className="p-3 border-b border-slate-800 flex gap-2 sticky top-0 bg-slate-900 z-10">
+                            <button onClick={() => {setEditing({}); setTempPoints([]);}} className="flex-1 bg-amber-600 hover:bg-amber-500 text-white py-3 rounded text-xs font-bold shadow">NOVA ROTA</button>
+                            <button onClick={() => setViewMode('types')} className="bg-slate-800 text-slate-400 p-2 rounded"><Icon name="settings" size={18}/></button>
+                        </div>
+                        <div className="flex-1 p-2 space-y-2">{routes.map(r => (<div key={r.id} onClick={() => {setEditing(r); setTempPoints(r.points || []);}} className="p-3 rounded cursor-pointer hover:bg-slate-800 border-l-4 pl-3 bg-slate-900/50 transition" style={{borderLeftColor: types.find(t=>t.id===r.typeId)?.color||'#fff'}}><div className="font-bold text-slate-200 text-sm">{r.name}</div><div className="text-[10px] text-slate-500 mt-1 flex justify-between"><span>{r.duration||0}h</span>{r.npcId && <Icon name="user" size={10} className="text-amber-400"/>}</div></div>))}</div>
+                    </div>
+                    <div className="flex-1 relative flex flex-col min-h-[1250px]"><div className="absolute inset-0 z-0"><RPGMap mode="route" routeTypes={types.reduce((a,t)=>({...a,[t.id]:t}),{})} tempPoints={tempPoints} onMapClick={pt=>setTempPoints(p=>[...p, pt])} filters={{locations:true,routes:true,npcs:true}} routes={routes.filter(r=>r.id!==editing?.id)} npcs={npcs} /></div>
+                        {editing && (
+                            <div className="sticky top-20 left-6 z-[500] bg-slate-900/95 p-6 rounded-lg border border-amber-500/30 w-80 shadow-2xl backdrop-blur-md m-6">
+                                <h4 className="font-bold text-amber-500 mb-4 text-lg">Rota</h4>
+                                <div className="space-y-3 mb-4">
+                                    <div><label className="input-label">Nome da Rota</label><input value={editing.name||''} onChange={e=>setEditing({...editing, name:e.target.value})} className="input-field" placeholder="Nome" /></div>
+                                    <div><label className="input-label">Tipo de Rota</label><select value={editing.typeId||''} onChange={e=>setEditing({...editing, typeId:e.target.value})} className="input-field"><option value="">Selecione...</option>{types.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></div>
+                                    <div><label className="input-label">Duração do Ciclo (minutos reais)</label><input type="number" value={editing.duration||''} onChange={e=>setEditing({...editing, duration:parseInt(e.target.value)})} className="input-field" placeholder="Ex: 60" /></div>
+                                    <div>
+                                        <label className="input-label">NPC Associado (Opcional)</label>
+                                        <select value={editing.npcId||''} onChange={e=>setEditing({...editing, npcId:e.target.value})} className="input-field mt-1"><option value="">Nenhum</option>{npcs.map(n => <option key={n.id} value={n.id}>{n.nome || n.name}</option>)}</select>
+                                    </div>
+                                </div>
+                                <div className="flex justify-between text-xs text-slate-300 mb-4 bg-slate-800 p-2 rounded"><span>Pontos: <b>{tempPoints.length}</b></span><button onClick={()=>setTempPoints([])} className="text-red-400">Limpar</button></div>
+                                <div className="flex gap-2"><button onClick={saveRoute} className="flex-1 bg-green-600 py-2 rounded text-white font-bold">Salvar</button><button onClick={()=>{setEditing(null); setTempPoints([]);}} className="bg-slate-700 px-3 rounded text-white">X</button></div>{editing.id && <button onClick={()=>{if(confirm('Del?')) db.collection(COLS.ROUTES).doc(editing.id).delete(); setEditing(null);}} className="w-full mt-2 text-red-500 text-xs font-bold">EXCLUIR</button>}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const GroupsModule = () => {
+            const [groups, setGroups] = React.useState([]); const [editing, setEditing] = React.useState(null); const [tempPoints, setTempPoints] = React.useState([]);
+            React.useEffect(() => { return db.collection(COLS.GROUPS).onSnapshot(s => setGroups(s.docs.map(d => ({id: d.id, ...d.data()})))); }, []);
+            const saveGroup = async () => { if (!editing.name) return alert("Nome é obrigatório."); const data = { ...editing, locations: tempPoints }; if(editing.id) await db.collection(COLS.GROUPS).doc(editing.id).update(data); else await db.collection(COLS.GROUPS).add(data); setEditing(null); setTempPoints([]); };
+            return (
+                <div className="flex flex-row h-full relative">
+                    <div className="w-72 bg-slate-900 border-r border-slate-800 flex flex-col sticky top-14 h-[calc(100vh-3.5rem)] overflow-y-auto z-20">
+                        <div className="p-3 border-b border-slate-800 flex gap-2 sticky top-0 bg-slate-900 z-10"><button onClick={() => {setEditing({ color: '#06b6d4' }); setTempPoints([]);}} className="flex-1 bg-cyan-600 hover:bg-cyan-500 text-white py-3 rounded text-xs font-bold shadow flex items-center justify-center gap-2"><Icon name="plus" size={14}/> NOVO GRUPO</button></div>
+                        <div className="flex-1 p-2 space-y-2">{groups.map(g => (<div key={g.id} onClick={() => {setEditing(g); setTempPoints(g.locations || []);}} className="p-3 rounded cursor-pointer hover:bg-slate-800 border-l-4 pl-3 bg-slate-900/50 transition relative overflow-hidden" style={{borderLeftColor: g.color||'#fff'}}><div className="font-bold text-slate-200 text-sm">{g.name}</div><div className="text-[10px] text-slate-500 mt-1 flex justify-between"><span>{g.locations?.length||0} locais visitados</span></div></div>))}</div>
+                    </div>
+                    <div className="flex-1 relative flex flex-col min-h-[1250px]"><div className="absolute inset-0 z-0"><RPGMap mode="group" tempPoints={tempPoints} onMapClick={pt => setTempPoints(p => [...p, pt])} filters={{ locations: true, groups: true, editingColor: editing?.color }} groups={groups.filter(g => g.id !== editing?.id)} /></div>
+                        {editing && (<div className="sticky top-20 left-6 z-[500] bg-slate-900/95 p-6 rounded-lg border border-cyan-500/30 w-80 shadow-2xl backdrop-blur-md m-6"><h4 className="font-bold text-cyan-500 mb-4 text-lg flex items-center gap-2"><Icon name="users" size={20}/> Grupo</h4><div className="space-y-3 mb-4"><input value={editing.name||''} onChange={e=>setEditing({...editing, name:e.target.value})} className="input-field" placeholder="Nome do Grupo (ex: Heróis do Vale)" /><div className="flex items-center gap-2 bg-slate-800 p-2 rounded border border-slate-700"><input type="color" value={editing.color||'#06b6d4'} onChange={e=>setEditing({...editing, color:e.target.value})} className="h-8 w-8 bg-transparent cursor-pointer border-none" /><span className="text-xs text-slate-400">Cor do Traçado</span></div></div><div className="bg-slate-800 p-2 rounded max-h-48 overflow-y-auto mb-4 space-y-1"><div className="text-xs text-slate-500 font-bold mb-2 flex justify-between"><span>Locais Visitados</span> <span>{tempPoints.length}</span></div>{tempPoints.map((p, idx) => (<div key={idx} className="flex justify-between items-center text-xs bg-slate-900 p-1 rounded px-2"><span className="text-slate-300">Ponto #{idx+1}</span><button onClick={()=>setTempPoints(tempPoints.filter((_, i) => i !== idx))} className="text-red-500 hover:text-red-400">X</button></div>))}{tempPoints.length === 0 && <div className="text-xs text-slate-600 text-center py-2 italic">Clique no mapa para adicionar locais onde o grupo passou.</div>}</div><div className="flex gap-2"><button onClick={saveGroup} className="flex-1 bg-green-600 py-2 rounded text-white font-bold">Salvar</button><button onClick={()=>{setEditing(null); setTempPoints([]);}} className="bg-slate-700 px-3 rounded text-white">X</button></div>{editing.id && <button onClick={()=>{if(confirm('Apagar histórico do grupo?')) db.collection(COLS.GROUPS).doc(editing.id).delete(); setEditing(null);}} className="w-full mt-2 text-red-500 text-xs font-bold hover:text-red-400">EXCLUIR GRUPO</button>}</div>)}
+                    </div>
+                </div>
+            );
+        };
+
+        const EventsModule = () => {
+            const [events, setEvents] = React.useState([]); const [editing, setEditing] = React.useState(null);
+            React.useEffect(() => db.collection(COLS.EVENTS).onSnapshot(s => setEvents(s.docs.map(d => ({id: d.id, ...d.data()})))), []);
+            const save = async () => { const d={...editing, radius:editing.radius||150}; if(editing.id) await db.collection(COLS.EVENTS).doc(editing.id).update(d); else await db.collection(COLS.EVENTS).add(d); setEditing(null); };
+            return (
+                <div className="flex flex-row h-full relative">
+                    <div className="w-72 bg-slate-900 border-r border-slate-800 p-3 flex flex-col sticky top-14 h-[calc(100vh-3.5rem)] z-20">
+                        <button onClick={()=>setEditing({radius:150, color: '#ef4444', icon: 'Zap', chance: 10})} className="bg-purple-700 text-white py-3 rounded font-bold w-full text-xs shadow">NOVO EVENTO DE ÁREA</button>
+                        <div className="flex-1 overflow-y-auto space-y-2 mt-4">{events.map(ev => (<div key={ev.id} onClick={()=>setEditing(ev)} className="p-3 rounded cursor-pointer hover:bg-slate-800 border-l-4 bg-slate-900/50" style={{borderLeftColor: ev.color || 'purple'}}><div className="text-sm font-bold text-slate-200">{ev.name}</div><div className="text-[10px] text-slate-500 mt-1">{ev.chance}% | {ev.minDuration}-{ev.maxDuration} dias</div></div>))}</div>
+                    </div>
+                    <div className="flex-1 relative min-h-[1250px]"><div className="absolute inset-0 z-0"><RPGMap mode="circle" tempPoint={editing?.x?{lat:editing.y,lng:editing.x}:null} tempRadius={editing?.radius} onMapClick={pt=>editing && setEditing({...editing, x:pt.lng, y:pt.lat})} filters={{events:true}} events={events.filter(e=>e.id!==editing?.id)} /></div>
+                        {editing && (
+                            <div className="sticky top-20 left-6 z-[500] bg-slate-900/95 p-6 rounded w-80 border border-purple-500/30 shadow-2xl backdrop-blur-md m-6 max-h-[80vh] overflow-y-auto">
+                                <h4 className="font-bold text-purple-400 mb-4">Configurar Evento</h4>
+                                <label className="input-label">Nome do Evento</label><input value={editing.name||''} onChange={e=>setEditing({...editing, name:e.target.value})} placeholder="Ex: Chuva Ácida" className="input-field mb-3" />
+                                <div className="grid grid-cols-2 gap-3 mb-3"><div><label className="input-label">Chance (%)</label><input type="number" value={editing.chance||''} onChange={e=>setEditing({...editing, chance:parseInt(e.target.value)})} className="input-field" /></div><div><label className="input-label">Cor</label><input type="color" value={editing.color||'#ef4444'} onChange={e=>setEditing({...editing, color:e.target.value})} className="w-full h-9 bg-transparent border border-slate-600 rounded cursor-pointer" /></div></div>
+                                <div className="grid grid-cols-2 gap-3 mb-3"><div><label className="input-label">Min Dias</label><input type="number" value={editing.minDuration||1} onChange={e=>setEditing({...editing, minDuration:parseInt(e.target.value)})} className="input-field" /></div><div><label className="input-label">Max Dias</label><input type="number" value={editing.maxDuration||1} onChange={e=>setEditing({...editing, maxDuration:parseInt(e.target.value)})} className="input-field" /></div></div>
+                                <label className="input-label">Raio de Alcance</label><input type="range" min="50" max="2000" value={editing.radius||150} onChange={e=>setEditing({...editing, radius:parseInt(e.target.value)})} className="w-full accent-purple-500 mb-4 h-2 bg-slate-700 rounded-lg" />
+                                <label className="input-label">Ícone</label><div className="icon-grid mb-4 max-h-32 overflow-y-auto bg-slate-800 p-2 rounded">{EVENT_ICONS.map(ic => (<div key={ic} onClick={()=>setEditing({...editing, icon: ic})} className={`icon-option ${editing.icon === ic ? 'selected' : ''}`}><Icon name={ic} size={16}/></div>))}</div>
+                                <label className="input-label">Descrição</label><textarea value={editing.desc||''} onChange={e=>setEditing({...editing, desc:e.target.value})} placeholder="Efeitos..." rows="3" className="input-field mb-4"></textarea>
+                                <div className="flex gap-3"><button onClick={save} className="flex-1 bg-green-600 py-2 rounded text-white font-bold">Salvar</button><button onClick={()=>setEditing(null)} className="bg-slate-700 px-3 rounded text-white">X</button></div>{editing.id && <button onClick={()=>{if(confirm('Del?')) db.collection(COLS.EVENTS).doc(editing.id).delete(); setEditing(null);}} className="w-full mt-2 text-xs text-red-500 font-bold">EXCLUIR</button>}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const IsolatedModule = () => {
+            const [list, setList] = React.useState([]); const [npcs, setNpcs] = React.useState([]); const [editing, setEditing] = React.useState(null); const [tempPoints, setTempPoints] = React.useState([]);
+            React.useEffect(() => { const u1 = db.collection(COLS.ISOLATED).onSnapshot(s => setList(s.docs.map(d => ({id: d.id, ...d.data()})))); const u2 = db.collection(COLS.NPCS).onSnapshot(s => { const loaded = s.docs.map(d => ({id: d.id, ...d.data()})); loaded.sort((a, b) => (a.nome || a.name || '').localeCompare(b.nome || b.name || '')); setNpcs(loaded); }); return () => { u1(); u2(); }; }, []);
+            const save = async () => { if(!editing.name || tempPoints.length === 0) return alert('Nome e local obrigatórios'); const data = {...editing, spots: tempPoints.map(p => ({lat: p.lat, lng: p.lng, chance: p.chance || 10}))}; if(editing.id) await db.collection(COLS.ISOLATED).doc(editing.id).update(data); else await db.collection(COLS.ISOLATED).add(data); setEditing(null); setTempPoints([]); };
+            return (
+                <div className="flex flex-row h-full relative">
+                    <div className="w-72 bg-slate-900 border-r border-slate-800 p-3 flex flex-col sticky top-14 h-[calc(100vh-3.5rem)] z-20">
+                        <button onClick={()=>{setEditing({}); setTempPoints([]);}} className="bg-red-700 text-white py-3 rounded font-bold w-full text-xs shadow">NOVO ENCONTRO</button>
+                        <div className="flex-1 overflow-y-auto space-y-2 mt-4">{list.map(i => (<div key={i.id} onClick={()=>{setEditing(i); setTempPoints(i.spots||[]);}} className="p-3 rounded cursor-pointer hover:bg-slate-800 border-l-4 border-red-500 bg-slate-900/50"><div className="text-sm font-bold text-slate-200">{i.name}</div><div className="text-[10px] text-slate-500 mt-1">{i.spots?.length||0} locais</div></div>))}</div>
+                    </div>
+                    <div className="flex-1 relative min-h-[1250px]"><div className="absolute inset-0 z-0"><RPGMap mode="isolated" tempPoints={tempPoints} npcs={npcs} onMapClick={pt=>setTempPoints(p=>[...p, {...pt, chance: 10}])} filters={{isolated:true}} isolated={list.filter(l=>l.id!==editing?.id)} /></div>
+                        {editing && (<div className="sticky top-20 left-6 z-[500] bg-slate-900/95 p-6 rounded w-80 border border-red-500/30 shadow-2xl backdrop-blur-md m-6"><h4 className="font-bold text-red-400 mb-4">Encontro Isolado</h4><input value={editing.name||''} onChange={e=>setEditing({...editing, name:e.target.value})} placeholder="Nome" className="input-field mb-2" /><textarea value={editing.desc||''} onChange={e=>setEditing({...editing, desc:e.target.value})} placeholder="Descrição..." className="input-field mb-2"></textarea><input type="number" value={editing.frequency||''} onChange={e=>setEditing({...editing, frequency:parseInt(e.target.value)})} className="input-field mb-2" placeholder="Frequência (h)" /><div className="mb-3"><label className="text-xs text-slate-400 font-bold">NPC (Opcional)</label><select value={editing.npcId||''} onChange={e=>setEditing({...editing, npcId:e.target.value})} className="input-field mt-1"><option value="">Nenhum</option>{npcs.map(n => <option key={n.id} value={n.id}>{n.nome || n.name}</option>)}</select></div><div className="bg-slate-800 p-2 rounded max-h-32 overflow-y-auto mb-2"><label className="text-xs text-slate-500 font-bold block">Locais ({tempPoints.length})</label>{tempPoints.map((p, i) => (<div key={i} className="flex items-center gap-2 text-xs mb-1"><span className="w-4 text-center">{i+1}</span><input type="number" value={p.chance} onChange={(e)=>{const n=[...tempPoints]; n[i].chance=parseInt(e.target.value); setTempPoints(n);}} className="bg-slate-900 border border-slate-700 w-12 p-1 text-center rounded" /><span>%</span><button onClick={()=>setTempPoints(tempPoints.filter((_,idx)=>idx!==i))} className="text-red-500 ml-auto">X</button></div>))}</div><div className="flex gap-3"><button onClick={save} className="flex-1 bg-green-600 py-2 rounded text-white font-bold">Salvar</button><button onClick={()=>{setEditing(null); setTempPoints([]);}} className="bg-slate-700 px-3 rounded text-white">X</button></div>{editing.id && <button onClick={()=>{if(confirm('Del?')) db.collection(COLS.ISOLATED).doc(editing.id).delete(); setEditing(null);}} className="w-full mt-2 text-xs text-red-500 font-bold">EXCLUIR</button>}</div>)}
+                    </div>
+                </div>
+            );
+        }
+
+        const ChronologyModule = () => {
+            const [state, setState] = React.useState({ year:1, month:1, day:1, time:'12:00', seasonId:'' }); const [seasons, setSeasons] = React.useState([]);
+            React.useEffect(() => { const u1 = db.collection(COLS.WORLD).doc('main').onSnapshot(d => { const s = d.data() || {}; setState({ year: s.year||1, month: s.month||1, day: s.day||1, time: s.time||'12:00', seasonId: s.seasonId||'' }); }); const u2 = db.collection(COLS.SEASONS).onSnapshot(s => setSeasons(s.docs.map(d => ({id: d.id, ...d.data()})))); return () => { u1(); u2(); }; }, []);
+            const updateManual = (k, v) => db.collection(COLS.WORLD).doc('main').update({[k]: v});
+            const [h] = state.time.split(':').map(Number); const isNight = h >= 19 || h < 6; const sunPos = isNight ? 'translate-y-10 opacity-0' : '-translate-y-2 opacity-100'; const moonPos = isNight ? '-translate-y-2 opacity-100' : 'translate-y-10 opacity-0';
+            const moonState = getLunarState(state.day, state.month, state.year);
+            return (
+                <div className="flex flex-row h-full min-h-[1250px] bg-slate-950">
+                    <div className="flex-1 p-10 flex flex-col items-center justify-center">
+                        <div className={`relative p-12 rounded-full w-[400px] h-[400px] border-8 transition-all duration-1000 flex flex-col items-center justify-center shadow-[0_0_50px_rgba(0,0,0,0.5)] live-indicator mb-10 ${isNight ? 'border-indigo-900 bg-slate-950' : 'border-sky-500 bg-sky-950'}`}><div className={`absolute top-10 transition-all duration-1000 ${sunPos}`}><Icon name="sun" size={48} className="text-yellow-400" /></div><div className={`absolute top-10 transition-all duration-1000 ${moonPos}`}><Icon name="moon" size={48} className="text-indigo-300" /></div><div className="text-6xl font-mono font-bold mb-2 tracking-widest text-white">{state.time}</div><div className="text-xl uppercase tracking-[0.3em] text-slate-400 mb-8">{state.day} / {state.month} / {state.year}</div></div>
+                        <div className="bg-slate-900/80 p-6 rounded-xl border border-slate-700 w-full max-w-2xl backdrop-blur flex items-center gap-6 mb-4"><div className="w-20 h-20 rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(255,255,255,0.1)]" style={{backgroundColor: moonState.color}}><Icon name={moonState.icon} size={40} className="text-slate-900" /></div><div className="flex-1"><h3 className="text-lg font-bold text-slate-200 uppercase tracking-widest">{moonState.name}</h3><div className="w-full bg-slate-800 h-2 rounded-full mt-2 mb-1 overflow-hidden"><div className="h-full bg-indigo-500" style={{width: `${(1 - (moonState.daysToNext/28))*100}%`}}></div></div><p className="text-xs text-slate-400">Próxima fase em <span className="text-white font-bold">{moonState.daysToNext} dias</span></p></div></div>
+                        <div className="bg-slate-900/80 p-6 rounded-xl border border-slate-700 w-full max-w-2xl backdrop-blur flex items-center gap-4"><Icon name="wind" size={32} className="text-amber-500"/><div className="flex-1"><label className="text-xs font-bold text-slate-500 uppercase">Estação Vigente</label><select value={state.seasonId||''} onChange={e=>updateManual('seasonId',e.target.value)} className="bg-transparent text-2xl font-serif text-amber-400 w-full outline-none cursor-pointer border-b border-transparent hover:border-amber-500/50 transition"><option value="" className="bg-slate-900 text-slate-500">Selecione...</option>{seasons.map(s=><option key={s.id} value={s.id} className="bg-slate-900 text-white">{s.name}</option>)}</select></div></div>
+                    </div>
+                    <div className="w-80 bg-slate-900 border-l border-slate-800 p-6 sticky top-14 h-[calc(100vh-3.5rem)] overflow-y-auto">
+                        <h3 className="text-xl text-amber-500 mb-6 font-serif border-b border-slate-800 pb-2">Intervenção Divina</h3>
+                        <div className="grid grid-cols-2 gap-4 mb-8"><div><label className="text-[10px] uppercase font-bold text-slate-500">Hora</label><input type="time" value={state.time} onChange={e=>updateManual('time',e.target.value)} className="input-field text-center font-mono" /></div><div><label className="text-[10px] uppercase font-bold text-slate-500">Dia</label><input type="number" value={state.day} onChange={e=>updateManual('day',parseInt(e.target.value))} className="input-field text-center" /></div><div><label className="text-[10px] uppercase font-bold text-slate-500">Mês</label><input type="number" value={state.month} onChange={e=>updateManual('month',parseInt(e.target.value))} className="input-field text-center" /></div><div><label className="text-[10px] uppercase font-bold text-slate-500">Ano</label><input type="number" value={state.year} onChange={e=>updateManual('year',parseInt(e.target.value))} className="input-field text-center" /></div></div>
+                        <h3 className="text-sm text-slate-400 mb-4 font-bold uppercase border-t border-slate-800 pt-4">Gerenciar Estações</h3><form onSubmit={(e)=>{e.preventDefault(); db.collection(COLS.SEASONS).add({name:e.target.name.value, desc:e.target.desc.value}); e.target.reset();}} className="space-y-3 mb-8 bg-slate-800 p-4 rounded border border-slate-700"><input name="name" placeholder="Nome" className="input-field text-sm" required /><textarea name="desc" placeholder="Efeitos..." className="input-field text-sm" rows="2"></textarea><button className="bg-green-700 w-full py-2 rounded text-white text-xs font-bold shadow">CRIAR</button></form><div className="space-y-2">{seasons.map(s => (<div key={s.id} className="bg-slate-800 p-3 rounded border border-slate-700 relative group hover:border-amber-500/30"><div className="font-bold text-slate-200">{s.name}</div><div className="text-xs text-slate-500 mt-1 line-clamp-2">{s.desc}</div><button onClick={()=>db.collection(COLS.SEASONS).doc(s.id).delete()} className="absolute top-2 right-2 text-red-500 opacity-0 group-hover:opacity-100"><Icon name="trash" size={14}/></button></div>))}</div>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- MÓDULO 8: DUNGEONS (COMPLETO) ---
+        const DungeonsModule = ({ showAlert, showConfirm, showModal }) => {
+            const [dungeons, setDungeons] = React.useState([]);
+            const [monsters, setMonsters] = React.useState([]);
+            const [items, setItems] = React.useState([]);
+            const [players, setPlayers] = React.useState([]);
+            const [worldState, setWorldState] = React.useState({});
+            
+            const [editing, setEditing] = React.useState(null);
+            const [activeTab, setActiveTab] = React.useState('create'); 
+            const [manageSelection, setManageSelection] = React.useState(null);
+            const [selectedPlayers, setSelectedPlayers] = React.useState([]);
+            const [editorTab, setEditorTab] = React.useState('general'); 
+            const [activeRewardTier, setActiveRewardTier] = React.useState('basic');
+            const [searchTerm, setSearchTerm] = React.useState('');
+
+            React.useEffect(() => {
+                const unsubs = [
+                    db.collection(COLS.DUNGEONS).onSnapshot(s => setDungeons(s.docs.map(d => ({id: d.id, ...d.data()})))),
+                    db.collection(COLS.MONSTERS).orderBy('nome').onSnapshot(s => setMonsters(s.docs.map(d => ({id: d.id, ...d.data()})))),
+                    db.collection(COLS.PLAYERS).orderBy('nome').onSnapshot(s => setPlayers(s.docs.map(d => ({id: d.id, ...d.data()})))),
+                    db.collection(COLS.WORLD).doc('main').onSnapshot(d => setWorldState(d.data() || {}))
+                ];
+                const fetchItems = async () => {
+                    const snap1 = await db.collection(COLS.ITEMS).get();
+                    const snap2 = await db.collection(COLS.ITEMS_BAG).get();
+                    const map = new Map();
+                    snap1.docs.forEach(d => map.set(d.id, {id: d.id, ...d.data()}));
+                    snap2.docs.forEach(d => { if(!map.has(d.id)) map.set(d.id, {id: d.id, ...d.data()}); });
+                    const arr = Array.from(map.values());
+                    arr.sort((a,b) => (a.nome||'').localeCompare(b.nome||''));
+                    setItems(arr);
+                };
+                fetchItems();
+                return () => unsubs.forEach(u => u());
+            }, []);
+
+            const saveDungeon = async () => {
+                if (!editing.name) { showAlert("Nome obrigatório"); return; }
+                const data = { ...editing, x: editing.x || 0, y: editing.y || 0, createdDay: editing.createdDay || worldState.day || 1 };
+                if(editing.id) await db.collection(COLS.DUNGEONS).doc(editing.id).update(data);
+                else await db.collection(COLS.DUNGEONS).add(data);
+                setEditing(null);
+                showAlert("Dungeon salva com sucesso!");
+            };
+
+            const handleClone = async () => {
+                if (!editing) return;
+                const clonedData = { ...editing, id: undefined, name: `${editing.name} (Cópia)`, x: null, y: null, runCount: 0, createdDay: worldState.day || 1 };
+                delete clonedData.id;
+                setEditing(clonedData);
+                showAlert("Dungeon clonada! Reposicione-a no mapa e salve.");
+            };
+
+            const setRewardQty = (itemId, newQty) => {
+                const newRewards = { ...editing.rewards };
+                if (!newRewards[activeRewardTier]) newRewards[activeRewardTier] = {};
+                if (newQty <= 0) delete newRewards[activeRewardTier][itemId];
+                else newRewards[activeRewardTier][itemId] = newQty;
+                setEditing({ ...editing, rewards: newRewards });
+            };
+
+            const handleLootGen = async () => {
+                if (!manageSelection || selectedPlayers.length === 0) { showAlert("Selecione uma dungeon e pelo menos um jogador."); return; }
+                const tier = getDungeonTier(manageSelection.createdDay, worldState.day || 1);
+                const tierKey = tier === 0 ? 'basic' : (tier === 1 ? 'int' : 'adv');
+                const lootTable = manageSelection.rewards?.[tierKey] || {};
+                const updates = {}; 
+                let log = [];
+                Object.entries(lootTable).forEach(([itemId, qty]) => {
+                    const quantity = parseInt(qty);
+                    if (quantity > 0) {
+                        const luckyPlayerId = selectedPlayers[Math.floor(Math.random() * selectedPlayers.length)];
+                        if (!updates[luckyPlayerId]) updates[luckyPlayerId] = {};
+                        updates[luckyPlayerId][itemId] = (updates[luckyPlayerId][itemId] || 0) + quantity;
+                        const itemName = items.find(i => i.id === itemId)?.nome || itemId;
+                        const playerName = players.find(p => p.id === luckyPlayerId)?.nome;
+                        log.push(`${playerName} recebeu ${quantity}x ${itemName}`);
+                    }
+                });
+                try {
+                    const batch = db.batch();
+                    Object.entries(updates).forEach(([pid, loot]) => {
+                        const ref = db.collection(COLS.PLAYERS).doc(pid);
+                        const updateData = {};
+                        Object.entries(loot).forEach(([iid, q]) => { updateData[`mochila.${iid}`] = increment(q); });
+                        batch.update(ref, updateData);
+                    });
+                    batch.update(db.collection(COLS.DUNGEONS).doc(manageSelection.id), { runCount: increment(1) });
+                    await batch.commit();
+                    showAlert(`Saque realizado!\n\n${log.join('\n')}`);
+                } catch (err) { showAlert("Erro ao distribuir loot: " + err.message); }
+            };
+
+            const handleDelete = () => {
+                showConfirm('Excluir esta Dungeon?', () => { db.collection(COLS.DUNGEONS).doc(editing.id).delete(); setEditing(null); });
+            };
+
+            const openPassPicker = () => {
+                showModal({
+                    type: 'picker',
+                    title: `Adicionar Passe de Entrada`,
+                    content: ( <ItemPicker items={items} onSelect={(item) => { const currentPasses = editing.passes || []; setEditing({ ...editing, passes: [...currentPasses, { itemId: item.id, name: item.nome, qty: 1 }] }); }} /> )
+                });
+            };
+
+            const filteredItems = items.filter(i => (i.nome || i.name || '').toLowerCase().includes(searchTerm.toLowerCase()));
+
+            return (
+                <div className="flex flex-row h-full relative">
+                    <div className="w-80 bg-slate-900 border-r border-slate-800 flex flex-col sticky top-14 h-[calc(100vh-3.5rem)] overflow-y-auto z-20">
+                         <div className="flex border-b border-slate-800">
+                            <button onClick={()=>setActiveTab('create')} className={`flex-1 py-3 text-xs font-bold uppercase ${activeTab==='create'?'text-amber-500 bg-slate-800':'text-slate-500 hover:text-slate-300'}`}>Criar/Editar</button>
+                            <button onClick={()=>setActiveTab('manage')} className={`flex-1 py-3 text-xs font-bold uppercase ${activeTab==='manage'?'text-amber-500 bg-slate-800':'text-slate-500 hover:text-slate-300'}`}>Gerenciar</button>
+                        </div>
+                        <div className="p-3">
+                            {activeTab === 'create' && (
+                                <button onClick={() => {setEditorTab('general'); setEditing({ difficulty: 1, floors: 1, rewards: {basic:{}, int:{}, adv:{}}, passes: [] });}} className="w-full bg-amber-700 hover:bg-amber-600 text-white py-3 rounded font-bold flex items-center justify-center gap-2 shadow-lg mb-4">
+                                    <Icon name="plus" size={16} /> NOVA DUNGEON
+                                </button>
+                            )}
+                            <div className="space-y-2">
+                                {dungeons.map(d => (
+                                    <div key={d.id} onClick={() => activeTab === 'create' ? setEditing(d) : setManageSelection(d)} className={`p-3 rounded cursor-pointer border-l-4 transition ${ (editing?.id === d.id || manageSelection?.id === d.id) ? 'bg-slate-800 border-amber-500' : 'bg-slate-900/50 border-transparent hover:bg-slate-800' }`}>
+                                        <div className="font-bold text-slate-200">{d.name}</div>
+                                        <div className="flex justify-between mt-1 text-[10px] text-slate-400"><span>{d.floors} Andares</span><span>Runs: {d.runCount||0}</span></div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                    <div className="flex-1 relative min-h-[1250px] bg-slate-950 flex flex-col">
+                        {(!editing && !manageSelection) && ( <div className="absolute inset-0 z-0"><RPGMap mode="dungeon" dungeons={dungeons} filters={{ dungeons: true, locations: true }} worldDay={worldState.day||1} /></div> )}
+                        {editing && activeTab === 'create' && (
+                            <div className="flex-1 p-8 overflow-y-auto bg-slate-950">
+                                <div className="max-w-5xl mx-auto bg-slate-900 border border-slate-700 rounded-lg p-6 shadow-2xl">
+                                    <div className="flex justify-between items-center mb-6 border-b border-slate-700 pb-4">
+                                        <h2 className="text-2xl rpg-title text-amber-500">{editing.id ? 'Editar' : 'Criar'} Dungeon</h2>
+                                        <div className="flex gap-2">
+                                            <button onClick={() => setEditing({...editing, y: null, x: null})} className="text-xs bg-slate-800 px-3 py-1 rounded text-cyan-400 border border-cyan-900 hover:bg-cyan-900/20">{editing.x ? 'Reposicionar no Mapa' : 'Clique no Mapa para Posicionar'}</button>
+                                            <button onClick={() => setEditing(null)} className="text-slate-500 hover:text-white"><Icon name="x" /></button>
+                                        </div>
+                                    </div>
+                                    {!editing.x && (
+                                        <div className="h-64 w-full mb-6 relative border-2 border-dashed border-amber-500/30 rounded-lg overflow-hidden">
+                                            <div className="absolute inset-0 bg-black/50 z-10 flex items-center justify-center text-amber-500 font-bold pointer-events-none">CLIQUE PARA POSICIONAR</div>
+                                            <RPGMap mode="dungeon" tempPoint={{lat:0, lng:0}} onMapClick={pt => setEditing({...editing, x: pt.lng, y: pt.lat})} filters={{}} />
+                                        </div>
+                                    )}
+                                    <div className="flex border-b border-slate-800 mb-6 overflow-x-auto">
+                                        <button onClick={() => setEditorTab('general')} className={`editor-tab ${editorTab==='general'?'active':''}`}>Geral</button>
+                                        <button onClick={() => setEditorTab('monsters')} className={`editor-tab ${editorTab==='monsters'?'active':''}`}>Monstros</button>
+                                        <button onClick={() => setEditorTab('passes')} className={`editor-tab ${editorTab==='passes'?'active':''}`}>Passes</button>
+                                        <button onClick={() => {setEditorTab('rewards'); setActiveRewardTier('basic');}} className={`editor-tab ${editorTab==='rewards'?'active':''}`}>Recompensas</button>
+                                    </div>
+                                    <div className="min-h-[300px]">
+                                        {editorTab === 'general' && (
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                                <div className="space-y-4">
+                                                    <label className="block text-slate-400 text-sm">Nome da Dungeon</label>
+                                                    <input value={editing.name||''} onChange={e=>setEditing({...editing, name:e.target.value})} className="input-field" placeholder="Ex: Caverna do Dragão" />
+                                                    <div className="flex gap-4">
+                                                        <div className="flex-1"><label className="text-xs text-slate-400">Andares</label><input type="number" value={editing.floors||1} onChange={e=>setEditing({...editing, floors:parseInt(e.target.value)})} className="input-field" /></div>
+                                                        <div className="flex-1"><label className="text-xs text-slate-400">Dificuldade (1-5)</label><input type="number" min="1" max="5" value={editing.difficulty||1} onChange={e=>setEditing({...editing, difficulty:parseInt(e.target.value)})} className="input-field" /></div>
+                                                    </div>
+                                                    <div className="flex-1"><label className="text-xs text-slate-400">Inimigos Base por Andar</label><input type="number" value={editing.baseEnemies||5} onChange={e=>setEditing({...editing, baseEnemies:parseInt(e.target.value)})} className="input-field" /></div>
+                                                </div>
+                                                <div className="bg-slate-800/30 p-4 rounded text-xs text-slate-400 italic border border-slate-700"><p>Use a aba <b>Monstros</b> para definir quais inimigos aparecem.</p><p className="mt-2">Use a aba <b>Passes</b> para criar chaves ou itens requeridos para entrada.</p><p className="mt-2">Use a aba <b>Recompensas</b> para configurar o loot dos baús.</p></div>
+                                            </div>
+                                        )}
+                                        {editorTab === 'monsters' && (
+                                            <div className="bg-slate-800 p-2 rounded h-96 overflow-y-auto border border-slate-700">
+                                                {monsters.map(m => (
+                                                    <label key={m.id} className="flex items-center gap-3 p-2 hover:bg-slate-700 rounded cursor-pointer border-b border-slate-700/50">
+                                                        <input type="checkbox" checked={!!editing.selectedMonsters?.includes(m.id)} onChange={e => { const list = editing.selectedMonsters || []; if (e.target.checked) setEditing({...editing, selectedMonsters: [...list, m.id]}); else setEditing({...editing, selectedMonsters: list.filter(id => id !== m.id)}); }} className="accent-amber-500 w-4 h-4" />
+                                                        <img src={m.imageUrls?.imagem1 || ''} className="w-10 h-10 rounded-full object-cover bg-black border border-slate-600" />
+                                                        <div className="text-sm"><div className="font-bold text-slate-200">{m.nome}</div><div className="text-[10px] text-slate-400 flex gap-2"><span className="text-red-400">ATK {m.atk_base}</span><span className="text-blue-400">DEF {m.def_base}</span></div></div>
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        )}
+                                        {editorTab === 'passes' && (
+                                            <div className="max-w-xl mx-auto">
+                                                <h3 className="text-lg font-bold text-cyan-500 mb-4 flex items-center gap-2"><Icon name="key" size={20}/> Itens de Acesso</h3>
+                                                <PassesEditor passes={editing.passes || []} items={items} onUpdate={(newPasses) => setEditing({...editing, passes: newPasses})} openPicker={openPassPicker} />
+                                            </div>
+                                        )}
+                                        {editorTab === 'rewards' && (
+                                            <div>
+                                                <div className="flex mb-4 gap-2 overflow-x-auto pb-2">
+                                                    {['basic', 'int', 'adv'].map(tier => (<button key={tier} onClick={() => setActiveRewardTier(tier)} className={`px-4 py-2 font-bold uppercase rounded border whitespace-nowrap transition-all ${activeRewardTier === tier ? 'bg-amber-900/50 border-amber-600 text-amber-500' : 'bg-slate-800 border-slate-700 text-slate-500'}`}>{tier}</button>))}
+                                                    {editing.passes?.map((pass, idx) => (<button key={`pass_${idx}`} onClick={() => setActiveRewardTier(`pass_${idx}`)} className={`px-4 py-2 font-bold uppercase rounded border whitespace-nowrap transition-all ${activeRewardTier === `pass_${idx}` ? 'bg-cyan-900/50 border-cyan-500 text-cyan-400' : 'bg-slate-800 border-slate-700 text-slate-500'}`}>Loot: {pass.name}</button>))}
+                                                </div>
+                                                <div className="bg-slate-800/80 p-4 rounded-lg border border-slate-600 mb-6">
+                                                    <div className="flex items-center gap-2 mb-4"><Icon name="search" size={18} className="text-slate-400"/><input type="text" placeholder="Buscar item..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="bg-transparent border-b border-slate-600 focus:border-amber-500 outline-none text-white w-full py-1" /></div>
+                                                    <div className="master-grid">
+                                                        {filteredItems.map(item => {
+                                                            const qty = editing.rewards?.[activeRewardTier]?.[item.id] || 0;
+                                                            return (
+                                                                <div key={item.id} className={`master-item ${qty > 0 ? 'selected' : ''}`}>
+                                                                    {item.imagemUrl ? (<div className="master-img" style={{backgroundImage: `url('${item.imagemUrl}')`}} />) : (<div className="master-img flex items-center justify-center bg-slate-900 text-[9px] text-slate-500">{item.nome.substring(0,4)}</div>)}
+                                                                    <div className="w-full text-center text-[10px] truncate px-1" title={item.nome}>{item.nome}</div>
+                                                                    <div className="master-controls">
+                                                                        <div className="ctrl-btn btn-minus" onClick={() => setRewardQty(item.id, qty - 1)}>-</div>
+                                                                        <input type="number" className="ctrl-qty-input" value={qty} onChange={(e) => setRewardQty(item.id, parseInt(e.target.value) || 0)} onClick={(e) => e.stopPropagation()} />
+                                                                        <div className="ctrl-btn btn-plus" onClick={() => setRewardQty(item.id, qty + 1)}>+</div>
+                                                                    </div>
+                                                                </div>
+                                                            )
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="mt-6 flex gap-4 pt-4 border-t border-slate-700">
+                                        <button onClick={saveDungeon} className="flex-1 bg-green-600 hover:bg-green-500 py-3 rounded text-white font-bold shadow-lg transition transform hover:scale-[1.02]">SALVAR DUNGEON</button>
+                                        <button onClick={handleClone} className="px-4 bg-cyan-700 hover:bg-cyan-600 rounded text-white font-bold transition flex items-center gap-2"><Icon name="copy" size={16}/> Clonar</button>
+                                        {editing.id && <button onClick={handleDelete} className="px-6 bg-red-900 hover:bg-red-800 rounded text-white font-bold transition">EXCLUIR</button>}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                        {manageSelection && activeTab === 'manage' && (
+                            <div className="flex-1 p-8 overflow-y-auto bg-slate-950 flex flex-col items-center">
+                                <div className="max-w-2xl w-full bg-slate-900 border border-slate-700 rounded-lg p-6 shadow-2xl relative">
+                                    <button onClick={()=>setManageSelection(null)} className="absolute top-4 right-4 text-slate-500 hover:text-white"><Icon name="x" /></button>
+                                    <div className="text-center mb-8"><h2 className="text-3xl rpg-title text-amber-500 mb-2">{manageSelection.name}</h2><div className="flex justify-center gap-4 text-sm text-slate-400"><span className="flex items-center gap-1"><Icon name="layers" size={14}/> {manageSelection.floors} Andares</span><span className="flex items-center gap-1"><Icon name="skull" size={14}/> Dificuldade {manageSelection.difficulty}</span><span className="flex items-center gap-1"><Icon name="rotate-cw" size={14}/> {manageSelection.runCount||0} Runs</span></div></div>
+                                    {manageSelection.passes && manageSelection.passes.length > 0 && (
+                                        <div className="mb-6 p-4 bg-slate-950 rounded border border-cyan-900/50">
+                                            <h4 className="text-xs font-bold text-cyan-500 uppercase mb-3 flex items-center gap-2"><Icon name="lock" size={14}/> Requisitos de Entrada</h4>
+                                            <div className="flex flex-wrap gap-2">{manageSelection.passes.map((pass, idx) => (<div key={idx} className="bg-slate-900 border border-cyan-800 px-3 py-2 rounded flex items-center gap-2"><Icon name="key" size={14} className="text-cyan-400"/><span className="text-sm text-slate-300">{pass.name}</span></div>))}</div>
+                                        </div>
+                                    )}
+                                    <div className="bg-slate-800/50 p-6 rounded-lg border border-slate-700 mb-8">
+                                        <h3 className="text-xs font-bold uppercase text-slate-500 mb-4 tracking-widest border-b border-slate-700 pb-2">Status Mundial Atual (Dia {worldState.day})</h3>
+                                        <div className="grid grid-cols-2 gap-8">
+                                            <div className="text-center"><div className="text-slate-400 text-xs mb-1">Dificuldade Vigente</div><div className={`text-2xl font-bold font-serif ${getTierColorClass(getDungeonTier(manageSelection.createdDay, worldState.day || 1)) === 'tier-basic' ? 'text-amber-700' : getTierColorClass(getDungeonTier(manageSelection.createdDay, worldState.day || 1)) === 'tier-int' ? 'text-slate-300' : 'text-yellow-400'}`}>{['Básica', 'Intermediária', 'Avançada'][getDungeonTier(manageSelection.createdDay, worldState.day || 1)]}</div></div>
+                                            <div className="text-center"><div className="text-slate-400 text-xs mb-1">Inimigos por Andar</div><div className="text-2xl font-bold font-mono text-red-400">{Math.floor((manageSelection.baseEnemies || 5) * 0.5)} - {Math.floor((manageSelection.baseEnemies || 5) * 1.2)}</div></div>
+                                        </div>
+                                    </div>
+                                    <div className="space-y-4">
+                                        <h3 className="font-bold text-slate-300 flex items-center gap-2"><Icon name="treasure" size={18}/> Gerar Recompensas</h3>
+                                        <div className="bg-slate-950 p-4 rounded border border-slate-800">
+                                            <div className="text-xs text-slate-500 mb-2">Recompensas Potenciais deste nível:</div>
+                                            <div className="item-grid mb-4 bg-slate-900/50 p-2 rounded">
+                                                {(() => {
+                                                    const tierKey = ['basic', 'int', 'adv'][getDungeonTier(manageSelection.createdDay, worldState.day || 1)];
+                                                    const rewards = manageSelection.rewards?.[tierKey] || {};
+                                                    const entries = Object.entries(rewards);
+                                                    if (entries.length === 0) return <span className="text-xs text-slate-600 italic col-span-4">Nenhum drop cadastrado.</span>;
+                                                    return entries.map(([iid, qty]) => { const it = items.find(i => i.id === iid); return (<div key={iid} className="item-slot" title={it?.nome} style={{backgroundImage: `url('${it?.imagemUrl || ''}')`}}>{!it?.imagemUrl && <span className="text-[8px] text-center px-1 text-slate-400">{it?.nome?.substring(0,6)}</span>}<span className="item-qty">{qty}</span></div>) });
+                                                })()}
+                                            </div>
+                                            <div className="text-xs text-slate-500 mb-2">Selecione os jogadores para dividir o saque:</div>
+                                            <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto mb-4">{players.map(p => (<label key={p.id} className={`flex items-center gap-2 p-2 rounded cursor-pointer border transition ${selectedPlayers.includes(p.id) ? 'bg-amber-900/30 border-amber-500/50' : 'bg-slate-900 border-slate-800 hover:bg-slate-800'}`}><input type="checkbox" checked={selectedPlayers.includes(p.id)} onChange={e => { if(e.target.checked) setSelectedPlayers([...selectedPlayers, p.id]); else setSelectedPlayers(selectedPlayers.filter(pid => pid !== p.id)); }} className="accent-amber-500" /><span className="text-sm truncate">{p.nome}</span></label>))}</div>
+                                            <button onClick={handleLootGen} className="w-full bg-yellow-600 hover:bg-yellow-500 text-white font-bold py-3 rounded shadow-lg flex items-center justify-center gap-2 transition transform hover:scale-[1.02]"><Icon name="gem" /> SAQUEAR BAÚ</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // --- APP SHELL (MUST BE LAST) ---
+
+// --- MÓDULO 9: SESSIONS (GRUPOS DE JOGO) ---
+        const SessionsModule = ({ showAlert, showConfirm }) => {
+            const [sessions, setSessions] = React.useState([]);
+            const [players, setPlayers] = React.useState([]);
+            const [editing, setEditing] = React.useState(null);
+
+            // Carrega dados iniciais
+            React.useEffect(() => {
+                const unsubSessions = db.collection(COLS.SESSIONS).onSnapshot(s => 
+                    setSessions(s.docs.map(d => ({ id: d.id, ...d.data() })))
+                );
+                const unsubPlayers = db.collection(COLS.PLAYERS).orderBy('nome').onSnapshot(s => 
+                    setPlayers(s.docs.map(d => ({ id: d.id, ...d.data() })))
+                );
+                return () => { unsubSessions(); unsubPlayers(); };
+            }, []);
+
+            // Salvar Sessão
+            const saveSession = async () => {
+                if (!editing.name || !editing.playerIds?.length) return showAlert("Defina um nome e escolha personagens.");
+                
+                const data = {
+                    ...editing,
+                    lastUpdate: firebase.firestore.FieldValue.serverTimestamp(),
+                    customTime: editing.customTime || "12:00",
+                    customDay: editing.customDay || 1,
+                    customMonth: editing.customMonth || 1,
+                    customYear: editing.customYear || 1,
+                    paused: editing.paused !== undefined ? editing.paused : true,
+                    timeScale: editing.timeScale || 1 // Novo campo de velocidade
+                };
+
+                if (editing.id) await db.collection(COLS.SESSIONS).doc(editing.id).update(data);
+                else await db.collection(COLS.SESSIONS).add(data);
+                
+                setEditing(null);
+                showAlert("Sessão salva com sucesso!");
+            };
+
+            // Alternar PAUSE/PLAY
+            const toggleTimeRunning = async (newState) => {
+                const isPaused = !newState; 
+                setEditing({...editing, paused: isPaused});
+                if(editing.id) {
+                    await db.collection(COLS.SESSIONS).doc(editing.id).update({ paused: isPaused });
+                }
+            };
+
+            // Alterar Velocidade (Salva imediatamente no banco para a Function ler)
+            const changeSpeed = async (speed) => {
+                const newSpeed = parseInt(speed);
+                setEditing({...editing, timeScale: newSpeed});
+                if(editing.id) {
+                    await db.collection(COLS.SESSIONS).doc(editing.id).update({ timeScale: newSpeed });
+                }
+            };
+
+            const deleteSession = (id) => {
+                showConfirm("Excluir esta sessão?", async () => {
+                    await db.collection(COLS.SESSIONS).doc(id).delete();
+                    setEditing(null);
+                });
+            };
+
+            const syncWithWorld = async () => {
+                const w = await db.collection(COLS.WORLD).doc('main').get();
+                if(w.exists) {
+                    const worldData = w.data();
+                    setEditing({
+                        ...editing,
+                        customTime: worldData.time,
+                        customDay: worldData.day,
+                        customMonth: worldData.month,
+                        customYear: worldData.year
+                    });
+                }
+            };
+
+            const getSessionSky = () => {
+                if(!editing || !editing.customTime) return { bg: 'bg-slate-900', icon: 'clock' };
+                const [h] = editing.customTime.split(':').map(Number);
+                const isNight = h >= 19 || h < 6;
+                return {
+                    bg: isNight ? 'border-indigo-900 bg-slate-950' : 'border-sky-500 bg-sky-950',
+                    icon: isNight ? 'moon' : 'sun'
+                };
+            };
+
+            const sky = getSessionSky();
+            const tempoEstaCorrendo = editing && editing.paused === false;
+            const currentSpeed = editing?.timeScale || 1;
+            const speeds = [1, 2, 5, 10, 20, 60]; // Opções de velocidade
+
+            return (
+                <div className="flex flex-row h-full relative bg-slate-950 min-h-[1000px]">
+                    <div className="w-80 bg-slate-900 border-r border-slate-800 flex flex-col sticky top-14 h-[calc(100vh-3.5rem)] z-20">
+                        <div className="p-3 border-b border-slate-800 bg-slate-900">
+                            <button onClick={() => setEditing({ name: '', playerIds: [], customTime: '12:00', customDay: 1, paused: true, timeScale: 1 })} 
+                                    className="w-full bg-indigo-700 hover:bg-indigo-600 text-white py-3 rounded font-bold flex items-center justify-center gap-2 shadow-lg">
+                                <Icon name="plus" size={16} /> NOVA SESSÃO
+                            </button>
+                        </div>
+                        <div className="flex-1 p-2 space-y-2 overflow-y-auto">
+                            {sessions.map(s => {
+                                const isRun = s.paused === false;
+                                return (
+                                    <div key={s.id} onClick={() => setEditing(s)} 
+                                         className={`p-3 rounded cursor-pointer border-l-4 transition ${editing?.id === s.id ? 'bg-slate-800 border-indigo-500' : 'bg-slate-900/50 border-transparent hover:bg-slate-800'}`}>
+                                        <div className="flex justify-between items-start mb-1">
+                                            <div className="font-bold text-slate-200 text-sm">{s.name}</div>
+                                            {isRun && <span className="text-[9px] text-green-400 font-bold animate-pulse">● {s.timeScale || 1}x</span>}
+                                        </div>
+                                        <div className="flex justify-between items-center text-[10px] text-slate-500 uppercase font-mono bg-black/20 p-1 rounded">
+                                            <span className="text-indigo-400 font-bold"><i data-lucide="clock" style={{width:10, display:'inline'}}></i> {s.customTime}</span>
+                                            <span>Dia {s.customDay}</span>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    <div className="flex-1 p-8 overflow-y-auto">
+                        {editing ? (
+                            <div className="max-w-4xl mx-auto">
+                                <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 shadow-2xl mb-6">
+                                    <div className="flex justify-between items-center mb-6 border-b border-slate-800 pb-4">
+                                        <h2 className="text-2xl rpg-title text-indigo-400">Gerenciar Sessão</h2>
+                                        <div className="flex gap-2">
+                                            <button onClick={syncWithWorld} className="text-xs bg-slate-800 hover:bg-slate-700 text-white px-3 py-1 rounded border border-slate-600 flex items-center gap-2">
+                                                <Icon name="globe" size={14} /> Sincronizar
+                                            </button>
+                                            <button onClick={() => setEditing(null)} className="text-slate-500 hover:text-white"><Icon name="x" /></button>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                        <div className="space-y-4">
+                                            <div>
+                                                <label className="input-label">Nome da Sessão</label>
+                                                <input value={editing.name} onChange={e => setEditing({...editing, name: e.target.value})} className="input-field" />
+                                            </div>
+                                            <div className="flex flex-col">
+                                                <label className="input-label">Membros ({editing.playerIds?.length || 0})</label>
+                                                <div className="bg-slate-950 border border-slate-800 rounded-lg p-2 h-64 overflow-y-auto space-y-1 custom-scroll">
+                                                    {players.map(p => {
+                                                        const isSelected = editing.playerIds?.includes(p.id);
+                                                        return (
+                                                            <label key={p.id} className={`flex items-center gap-3 p-2 rounded cursor-pointer border transition ${isSelected ? 'bg-indigo-900/30 border-indigo-500/50' : 'border-transparent hover:bg-slate-800'}`}>
+                                                                <input type="checkbox" checked={isSelected} 
+                                                                    onChange={e => {
+                                                                        const ids = editing.playerIds || [];
+                                                                        setEditing({...editing, playerIds: e.target.checked ? [...ids, p.id] : ids.filter(id => id !== p.id)});
+                                                                    }} className="accent-indigo-500 w-4 h-4" />
+                                                                <span className={`text-sm ${isSelected ? 'text-indigo-200 font-bold' : 'text-slate-400'}`}>{p.nome}</span>
+                                                            </label>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="flex flex-col items-center justify-center bg-slate-950/50 rounded-lg border border-slate-800 p-6 relative overflow-hidden">
+                                            {/* Relógio Visual */}
+                                            <div className={`relative p-8 rounded-full w-48 h-48 border-4 transition-all duration-1000 flex flex-col items-center justify-center shadow-2xl mb-6 ${sky.bg}`}>
+                                                <div className="text-4xl font-mono font-bold text-white tracking-widest">{editing.customTime}</div>
+                                                <div className="text-xs uppercase tracking-widest text-slate-400 mt-2">Dia {editing.customDay}</div>
+                                                <div className="absolute top-4 right-4 text-white opacity-50"><Icon name={sky.icon} size={24} /></div>
+                                                
+                                                <div className={`absolute bottom-4 flex items-center gap-1 text-[10px] uppercase font-bold ${tempoEstaCorrendo ? 'text-green-400' : 'text-red-400'}`}>
+                                                    <div className={`w-2 h-2 rounded-full ${tempoEstaCorrendo ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`}></div>
+                                                    {tempoEstaCorrendo ? `${currentSpeed}x Vel.` : 'Pausado'}
+                                                </div>
+                                            </div>
+
+                                            {/* Controles de Tempo */}
+                                            <div className="w-full space-y-3 relative z-10">
+                                                <div className="grid grid-cols-2 gap-4">
+                                                    <div>
+                                                        <label className="text-[10px] text-slate-500 uppercase font-bold">Hora</label>
+                                                        <input type="time" value={editing.customTime} onChange={e => setEditing({...editing, customTime: e.target.value})} className="input-field text-center font-mono text-xl" />
+                                                    </div>
+                                                    <div>
+                                                        <label className="text-[10px] text-slate-500 uppercase font-bold">Dia</label>
+                                                        <input type="number" value={editing.customDay} onChange={e => setEditing({...editing, customDay: parseInt(e.target.value)})} className="input-field text-center text-xl" />
+                                                    </div>
+                                                </div>
+
+                                                <label className={`flex items-center justify-center gap-3 p-3 rounded border cursor-pointer transition ${tempoEstaCorrendo ? 'bg-emerald-900/30 border-emerald-500/50' : 'bg-slate-800 border-slate-600 hover:bg-slate-700'}`}>
+                                                    <input type="checkbox" checked={tempoEstaCorrendo} onChange={e => toggleTimeRunning(e.target.checked)} className="w-5 h-5 accent-emerald-500" />
+                                                    <span className={`font-bold text-sm ${tempoEstaCorrendo ? 'text-emerald-400' : 'text-slate-400'}`}>
+                                                        {tempoEstaCorrendo ? 'TEMPO CORRENDO (SERVER)' : 'TEMPO PAUSADO'}
+                                                    </span>
+                                                </label>
+
+                                                {/* Seletor de Velocidade */}
+                                                <div className="pt-2 border-t border-slate-700">
+                                                    <label className="text-[10px] text-slate-500 uppercase font-bold block mb-2 text-center">Velocidade do Tempo</label>
+                                                    <div className="flex justify-center gap-1">
+                                                        {speeds.map(sp => (
+                                                            <button key={sp} onClick={() => changeSpeed(sp)} 
+                                                                    className={`px-2 py-1 rounded text-xs font-bold border transition ${currentSpeed === sp ? 'bg-indigo-600 border-indigo-400 text-white shadow-lg scale-110' : 'bg-slate-800 border-slate-600 text-slate-500 hover:bg-slate-700'}`}>
+                                                                {sp}x
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                    <p className="text-[9px] text-slate-500 text-center mt-2 italic">
+                                                        * Velocidades altas (5x+) ativam Regeneração automática de HP/MP nos jogadores.
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="mt-8 pt-6 border-t border-slate-800 flex gap-4">
+                                        <button onClick={saveSession} className="flex-1 bg-green-700 hover:bg-green-600 text-white py-3 rounded font-bold shadow-lg uppercase tracking-wider text-xs">SALVAR</button>
+                                        {editing.id && (
+                                            <button onClick={() => deleteSession(editing.id)} className="px-6 bg-red-900 hover:bg-red-800 text-white rounded font-bold text-xs">EXCLUIR</button>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="h-full flex flex-col items-center justify-center text-slate-700 opacity-20">
+                                <Icon name="hourglass" size={64} className="mb-4" />
+                                <p className="font-serif uppercase tracking-[0.2em] text-lg text-center">Linhas Temporais</p>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+
+
+		// --- INÍCIO SessionMapModule ---
+        const SessionMapModule = ({ showAlert }) => {
+			const [sessions, setSessions] = React.useState([]);
+			const [locations, setLocations] = React.useState([]);
+			const [selectedSession, setSelectedSession] = React.useState(null);
+			
+			// Ferramenta: 'reveal' (Olho) ou 'hide' (Borracha)
+			const [toolMode, setToolMode] = React.useState('reveal'); 
+			
+			// Estado LOCAL anti-lag (Buffer) para não travar o navegador enviando pro Firebase
+			const [localRevealed, setLocalRevealed] = React.useState([]);
+			const [isPainting, setIsPainting] = React.useState(false);
+
+			React.useEffect(() => {
+				const u1 = db.collection(COLS.SESSIONS).onSnapshot(s => setSessions(s.docs.map(d => ({id: d.id, ...d.data()}))));
+				const u2 = db.collection(COLS.LOCATIONS).onSnapshot(s => setLocations(s.docs.map(d => ({id: d.id, ...d.data()}))));
+				return () => { u1(); u2(); };
+			}, []);
+
+			// Quando mudar a sessão, carrega o backup do Firebase para o Buffer Local
+			React.useEffect(() => {
+				if (selectedSession) setLocalRevealed(selectedSession.revealedHexes || []);
+				else setLocalRevealed([]);
+			}, [selectedSession]);
+
+			// Função ultra-rápida (Apenas memória local)
+			const handleHexInteract = (hexId) => {
+				if (!selectedSession) return;
+
+				let newList = [...localRevealed];
+				let changed = false;
+
+				if (toolMode === 'reveal') {
+					if (!newList.includes(hexId)) {
+						newList.push(hexId);
+						changed = true;
+					}
+				} else {
+					if (newList.includes(hexId)) {
+						newList = newList.filter(id => id !== hexId);
+						changed = true;
+					}
+				}
+
+				if (changed) {
+					setLocalRevealed(newList); // Re-renderiza localmente sem rede
+				}
+			};
+
+			// Botão que o Mestre clica quando terminar de pintar
+			const handleSyncToFirebase = async () => {
+				if (!selectedSession) return;
+				try {
+					await db.collection(COLS.SESSIONS).doc(selectedSession.id).set({ revealedHexes: localRevealed }, { merge: true });
+					showAlert("Visão dos jogadores sincronizada no servidor!");
+				} catch (err) { console.error(err); showAlert("Erro ao sincronizar."); }
+			};
+
+			return (
+				<div className="flex flex-row h-full relative" 
+					 onMouseDown={() => setIsPainting(true)} 
+					 onMouseUp={() => setIsPainting(false)}
+					 onMouseLeave={() => setIsPainting(false)}
+				>
+					<div className="w-80 bg-slate-900 border-r border-slate-800 flex flex-col sticky top-14 h-[calc(100vh-3.5rem)] z-20 p-6">
+						<h3 className="text-green-500 font-serif font-bold mb-6 flex items-center gap-2 text-xl">
+							<Icon name="map" /> Mapa da Sessão
+						</h3>
+						
+						<div className="mb-6">
+							<label className="input-label">Selecione a Sessão</label>
+							<select 
+								className="input-field cursor-pointer" 
+								value={selectedSession?.id || ''} 
+								onChange={e => setSelectedSession(sessions.find(s => s.id === e.target.value))}
+							>
+								<option value="">-- Escolher --</option>
+								{sessions.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+							</select>
+						</div>
+
+						{selectedSession ? (
+							<div className="space-y-6 bg-slate-800 p-4 rounded border border-slate-700 animate-fade-in flex flex-col h-full">
+								<div>
+									<label className="input-label mb-2">Ferramenta Rápida (Buffer Local)</label>
+									<div className="flex gap-2">
+										<button 
+											onClick={() => setToolMode('reveal')}
+											className={`flex-1 py-3 rounded font-bold text-xs flex items-center justify-center gap-2 transition ${toolMode==='reveal' ? 'bg-green-600 text-white ring-2 ring-white shadow-lg' : 'bg-slate-900 text-slate-500 hover:bg-slate-700'}`}
+										>
+											<Icon name="eye" size={16}/> REVELAR
+										</button>
+										<button 
+											onClick={() => setToolMode('hide')}
+											className={`flex-1 py-3 rounded font-bold text-xs flex items-center justify-center gap-2 transition ${toolMode==='hide' ? 'bg-red-600 text-white ring-2 ring-white shadow-lg' : 'bg-slate-900 text-slate-500 hover:bg-slate-700'}`}
+										>
+											<Icon name="eye-off" size={16}/> OCULTAR
+										</button>
+									</div>
+								</div>
+
+								{/* NOVO: Botão de Sincronização */}
+								<div className="py-4 border-y border-slate-700">
+									<button 
+										onClick={handleSyncToFirebase} 
+										className="w-full py-4 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded shadow-xl flex items-center justify-center gap-2 uppercase tracking-wider transition transform hover:scale-[1.02] border-2 border-amber-400"
+									>
+										<Icon name="refresh-cw" size={18}/> Sincronizar Jogadores
+									</button>
+									<p className="text-[10px] text-slate-400 text-center mt-2 font-bold">
+										* Pinte o mapa primeiro, e então clique aqui para validar.
+									</p>
+								</div>
+
+								<div className="text-[10px] text-slate-400 bg-slate-900 p-3 rounded border border-slate-800 italic flex-1">
+									<p className="mb-1"><Icon name="info" size={10} className="inline"/> <b>Legenda:</b></p>
+									<ul className="list-disc pl-4 space-y-1">
+										<li><span className="text-slate-500">Cinza Escuro:</span> Não explorada.</li>
+										<li><span className="text-green-400">Verde Claro:</span> Visível aos jogadores.</li>
+									</ul>
+								</div>
+
+								<div className="pt-4 border-t border-slate-700 mt-auto">
+									<button 
+										onClick={() => {
+											if(confirm("ATENÇÃO: Ocultar todo o mapa novamente?")) {
+												setLocalRevealed([]); // Reseta localmente
+											}
+										}} 
+										className="w-full py-3 bg-red-950/50 hover:bg-red-900 text-red-300 text-xs font-bold rounded border border-red-900 flex items-center justify-center gap-2 transition"
+									>
+										<Icon name="rotate-ccw" size={14}/> REDEFINIR BUFFER
+									</button>
+								</div>
+							</div>
+						) : (
+							<div className="text-center text-slate-600 border-2 border-dashed border-slate-800 rounded p-8">
+								<Icon name="map-pin" size={40} className="mx-auto mb-4 opacity-50"/>
+								<p className="text-sm">Selecione uma sessão acima.</p>
+							</div>
+						)}
+					</div>
+
+					{/* Área do Mapa usando o LocalRevealed super rápido */}
+					<div className="flex-1 relative bg-slate-950 cursor-crosshair">
+						<div className="absolute inset-0 z-0">
+							<RPGMap 
+								mode="view" 
+								locations={locations}
+								revealedHexes={localRevealed} 
+								onHexClick={handleHexInteract} 
+								filters={{locations: true, dungeons: false, routes: false}} 
+							/>
+						</div>
+					</div>
+				</div>
+			);
+		};
+
+
+        // --- APP SHELL (ORQUESTRADOR PRINCIPAL) ---
+        const App = () => {
+            const [user, setUser] = React.useState(null); 
+            const [page, setPage] = React.useState('map');
+            const [modal, setModal] = React.useState(null);
+
+            React.useEffect(() => auth.onAuthStateChanged(setUser), []);
+
+            const login = (e) => { e.preventDefault(); auth.signInWithEmailAndPassword(e.target.email.value, e.target.pass.value).catch(err=>setModal({type:'alert', message: err.message})); };
+            const showAlert = (message) => setModal({ type: 'alert', message });
+            const showConfirm = (message, onConfirm) => setModal({ type: 'confirm', message, onConfirm });
+            const showModal = (config) => setModal(config);
+
+            if (!user) return (<><div className="h-screen w-full bg-black flex items-center justify-center p-4 fixed inset-0 z-[9998]"><form onSubmit={login} className="glass-panel p-8 rounded-2xl w-full max-w-md text-center"><h1 className="text-2xl rpg-title text-amber-500 mb-6">Portal do Mestre</h1><input name="email" type="email" placeholder="Email" className="input-field mb-3" /><input name="pass" type="password" placeholder="Senha" className="input-field mb-6" /><button className="w-full bg-amber-700 hover:bg-amber-600 text-white py-3 rounded font-bold">Entrar</button></form></div>{modal && <Modal {...modal} onClose={() => setModal(null)} />}</>);
+
+            // CORREÇÃO AQUI: Removemos o 'hidden md:inline' para o texto nunca sumir, e adicionamos 'whitespace-nowrap'
+            const NavItem = ({ id, icon, label }) => (
+                <button onClick={() => setPage(id)} className={`flex items-center gap-2 px-4 h-full border-b-2 transition whitespace-nowrap ${page===id ? 'border-amber-500 text-amber-500 bg-slate-900' : 'border-transparent text-slate-400 hover:text-white hover:bg-slate-800'}`}>
+                    <Icon name={icon} size={16} /> 
+                    <span className="font-bold text-[10px] md:text-xs uppercase tracking-wider">{label}</span>
+                </button>
+            );
+            
+            return (
+                <div className="flex flex-col min-h-screen w-full bg-slate-950 text-slate-200 overflow-hidden">
+                    {/* HEADER FORÇADO A APARECER E ROLAR */}
+                    <header className="bg-slate-950 border-b border-slate-800 flex items-center px-2 md:px-4 h-14 shrink-0 sticky top-0 z-[9999] w-full overflow-hidden shadow-xl">
+                        <div className="flex items-center gap-2 text-amber-600 font-serif font-bold text-sm lg:text-lg mr-4 shrink-0">
+                            <Icon name="crown" /> <span className="hidden lg:inline tracking-widest">ARCHITECT</span>
+                        </div>
+                        <nav className="flex h-full overflow-x-auto no-scrollbar flex-1 items-center justify-start custom-scroll-x">
+                            <NavItem id="map" icon="map" label="Global" />
+                            <NavItem id="sessions" icon="users" label="Sessões" />
+                            <NavItem id="sessionMap" icon="map" label="Mapa Sessões" />
+                            <NavItem id="dungeons" icon="castle" label="Dungeons" />
+                            <NavItem id="locations" icon="land-plot" label="Locais" />
+                            <NavItem id="routes" icon="route" label="Rotas" />
+                            <NavItem id="events" icon="zap" label="Eventos" />
+                            <NavItem id="isolated" icon="sword" label="Encontros" />
+                            <NavItem id="time" icon="hourglass" label="Tempo" />
+                        </nav>
+                        <button onClick={() => auth.signOut()} className="text-red-500 hover:bg-slate-800 p-2 rounded ml-2 shrink-0"><Icon name="log-out" size={18} /></button>
+                    </header>
+                    
+                    <main className="flex-1 relative flex flex-col w-full overflow-hidden">
+                        {page === 'map' && <GlobalMapModule />}
+                        {page === 'sessions' && <SessionsModule showAlert={showAlert} showConfirm={showConfirm} />}
+                        {page === 'sessionMap' && <SessionMapModule showAlert={showAlert} />}
+                        {page === 'locations' && <LocationsModule />}
+                        {page === 'dungeons' && <DungeonsModule showAlert={showAlert} showConfirm={showConfirm} showModal={showModal} />}
+                        {page === 'routes' && <RoutesModule />}
+                        {page === 'groups' && <GroupsModule />}
+                        {page === 'events' && <EventsModule />}
+                        {page === 'isolated' && <IsolatedModule />}
+                        {page === 'time' && <ChronologyModule />}
+                    </main>
+                    {modal && <Modal {...modal} onClose={() => setModal(null)} />}
+                </div>
+            );
+        };
+        
+        // Mantém as linhas de renderização
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+        
+
+    </script>
+
+</body>
+</html>
