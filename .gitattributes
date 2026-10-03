@@ -1,0 +1,7 @@
+﻿# Manter LF no repositório (o site é estático e roda em Linux/CI).
+* text=auto eol=lf
+
+# Binários que não devem ser normalizados
+*.png binary
+*.webp binary
+*.mp3 binary

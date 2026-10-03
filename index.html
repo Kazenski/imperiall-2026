@@ -8,17 +8,32 @@
 
     <link rel="icon" type="image/png" href="./imagens/favicon/faviconKazenski.png">
 
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!--
+      Tailwind: CSS ESTÁTICO, compilado no build.
+      Antes era <script src="https://cdn.tailwindcss.com">, que baixa o
+      compilador JIT (~380 KB de JS) e gera o CSS no navegador a cada
+      carregamento, com MutationObserver reagindo a cada `showTab`.
+      Resultado: JS de bloqueio no caminho crítico + FOUC em cada aba.
+
+      Gere com:  npm install && npm run build:css
+      Em desenvolvimento: npm run watch:css
+    -->
+    <link rel="stylesheet" href="./tailwind.css" />
+
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Inter:wght@400;500;700&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" />
     <link rel="stylesheet" href="style.css" />
 
-    <script src="https://unpkg.com/lucide@0.474.0/dist/umd/lucide.min.js"></script>
+    <!--
+      Leaflet e lucide carregados com defer: nao bloqueiam a renderizacao.
+      lucide foi REMOVIDO — nao havia nenhuma uso da biblioteca no projeto
+      (grep por `lucide.` nao retorna nada), entao eram ~50 KB de descarte.
+    -->
+    <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
 </head>
 
@@ -370,12 +385,10 @@
                     class="tab-content hidden h-full flex flex-col p-0 overflow-hidden relative"></div>
 
                 <!-- Páginas do admin -->
-                <div id="drops-monstros-content" class="tab-content hidden h-full w-full relative"></div>
                 <div id="backoffice-content" class="tab-content hidden h-full flex flex-col p-0"></div>
                 <div id="backups-content" class="tab-content hidden h-full flex flex-col p-0"></div>
                 <div id="cadastro-constelacoes-content"
                     class="tab-content hidden h-full flex flex-col p-0 overflow-hidden"></div>
-                <div id="cadastro-sets-especiais-content" class="tab-content hidden h-full flex flex-col p-0"></div>
                 <div id="cadastro-craft-content" class="tab-content hidden h-full flex flex-col p-0"></div>
                 <div id="cadastro-deuses-content" class="tab-content hidden h-full flex flex-col p-0"></div>
                 <div id="cadastro-ego-content" class="tab-content hidden h-full flex flex-col p-0"></div>
@@ -386,9 +399,7 @@
                 <div id="firebase-muda-all-content" class="tab-content hidden h-full flex flex-col p-0"></div>
                 <div id="firebase-muda-if-content" class="tab-content hidden h-full flex flex-col p-0"></div>
                 <div id="gerar-tabela-xp-content" class="tab-content hidden h-full flex flex-col p-0"></div>
-                <!-- <div id="mapa-mundial-content" class="tab-content hidden h-full flex flex-col p-0"></div> -->
-                <div id="mapa-mundial-content" class="tab-content hidden h-full flex flex-col p-0 overflow-hidden">
-                </div>
+                <div id="mapa-mundial-content" class="tab-content hidden h-full flex flex-col p-0 overflow-hidden"></div>
                 <div id="cadastro-users-content" class="tab-content hidden h-full flex flex-col p-0"></div>
 
             </main>
@@ -396,62 +407,26 @@
     </div>
 
     <script type="module" src="js/main.js"></script>
-    <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            setInterval(() => {
-                if (!window.globalState) return;
 
-                const charData = window.globalState.selectedCharacterData;
-                if (charData && charData.ficha) {
-                    document.getElementById('sidebar-char-name').textContent = charData.ficha.nome || 'Sem Nome';
-                    document.getElementById('sidebar-player-name').textContent = `Jogador: ${charData.ficha.jogador || 'N/A'}`;
-                    document.getElementById('sidebar-char-class').textContent = charData.classe?.nome || 'Sem Classe';
-                    document.getElementById('sidebar-char-subclass').textContent = charData.subclasse?.nome || 'Sem Subc.';
+    <!--
+      REMOVIDO (bug): havia aqui um `setInterval(..., 1000)` que atualizava a
+      barra lateral (nome, classe, HP/MP, fome, relógio do mundo, localização e
+      clima). Ele era 100% inoperante:
 
-                    const imgKey = charData.ficha.imagemPrincipal;
-                    const imgUrl = (imgKey && charData.ficha.imageUrls && charData.ficha.imageUrls[imgKey])
-                        ? charData.ficha.imageUrls[imgKey]
-                        : (charData.ficha.imagemUrl || 'https://placehold.co/400x400/0f172a/d4af37?text=Sem+Foto');
-                    document.getElementById('sidebar-char-img').src = imgUrl;
-                } else {
-                    document.getElementById('sidebar-char-name').textContent = '---';
-                    document.getElementById('sidebar-player-name').textContent = '---';
-                    document.getElementById('sidebar-char-class').textContent = '---';
-                    document.getElementById('sidebar-char-subclass').textContent = '---';
-                    document.getElementById('sidebar-char-img').src = 'https://placehold.co/400x400/0f172a/d4af37?text=Sem+Foto';
-                }
+        1. `globalState` é um `const` exportado de um módulo ES — módulos não
+           vazam bindings para `window`. Verifiquei: `window.globalState`
+           aparece 0 vezes em todo o projeto. Logo o `if (!window.globalState)
+           return;` abortava o callback a cada tique, para sempre.
 
-                const w = window.globalState.world?.data || {};
-                let timeDisplay = w.time || '--:--';
-                if (window.globalState.activeSessionId && window.globalState.activeSessionId !== 'world') {
-                    const sess = window.globalState.userSessions?.find(s => s.id === window.globalState.activeSessionId);
-                    if (sess && sess.customTime) timeDisplay = sess.customTime;
-                }
-                document.getElementById('sidebar-world-time').textContent = timeDisplay;
+        2. Mesmo se tivesse funcionado, teria lançado TypeError: o script
+           escrevia em `sidebar-player-name`, `sidebar-world-time`,
+           `sidebar-location` e `sidebar-weather` — NENHUM desses IDs existe
+           no HTML (a barra lateral só tem nome/classe/subclasse/ATK/DEF/EVA).
 
-                const locId = window.globalState.world?.selectedLocId;
-                const loc = window.globalState.world?.locations?.find(l => l.id === locId);
-                document.getElementById('sidebar-location').textContent = loc ? loc.name : 'Desconhecida';
-
-                const events = window.globalState.world?.events || [];
-                let weather = 'Céu Limpo';
-                let isDanger = false;
-                if (loc && loc.x !== undefined && loc.y !== undefined) {
-                    const localEvents = events.filter(ev => {
-                        const distance = Math.sqrt(Math.pow(loc.x - ev.x, 2) + Math.pow(loc.y - ev.y, 2));
-                        return distance <= (ev.radius || 0);
-                    });
-                    if (localEvents.length > 0) { weather = localEvents[0].name; isDanger = true; }
-                }
-                const wEl = document.getElementById('sidebar-weather');
-                if (wEl) {
-                    wEl.textContent = weather;
-                    wEl.className = `text-[10px] font-mono truncate block mt-0.5 ${isDanger ? 'text-red-400 animate-pulse' : 'text-emerald-400'}`;
-                }
-
-            }, 1000);
-        });
-    </script>
+      A responsabilidade já foi migrada para `updateGlobalBars()` e
+      `renderHeaderWidget()` em js/main.js, que são disparados pelos
+      snapshots do Firestore. Este bloco era resíduo daquela migração.
+    -->
 </body>
 
 </html>

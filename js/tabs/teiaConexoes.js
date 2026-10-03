@@ -21,6 +21,10 @@ function checkIsMaster() {
 export function renderTeiaConexoesTab(target) {
     if (!target) return;
 
+    // Sair da aba encerra as escutas: sem isso, visitar a aba 10 vezes deixava
+    // 20 listeners vivos (ver nota em unsubscribeTeia).
+    window.teiaUnsubscribe = unsubscribeTeia;
+
     // 1. Injeta a estrutura de HTML contendo o Inspector e os Formulários de Gestão
     target.innerHTML = `
         <div class="flex flex-col md:flex-row h-full w-full gap-4 p-4 animate-fade-in">
@@ -298,7 +302,27 @@ window.teia = {
     }
 };
 
+// Unsubscribe das escutas deste módulo.
+//
+// BUG CORRIGIDO (leak): `configurarGrafoEFormularios()` é chamado a cada
+// visita à aba e criava DOIS novos onSnapshot, descartando o valor de
+// retorno (sem unsubscribe). Após 10 visitas havia 20 escutas ativas: uma
+// única edição de NPC disparava 10 redesenhos do grafo, e cada redesenho
+// fazia `networkInstance.destroy()` + `new vis.Network(...)`, recomeçando a
+// simulação física do zero. Além disso, cada escuta antiga mantinha referência
+// a um <select> já desconectado do DOM.
+let npcsUnsub = null;
+let conexoesUnsub = null;
+
+/** Cancela as escutas anteriores (idempotente). */
+function unsubscribeTeia() {
+    if (npcsUnsub) { try { npcsUnsub(); } catch (e) { /* já desligado */ } npcsUnsub = null; }
+    if (conexoesUnsub) { try { conexoesUnsub(); } catch (e) { /* já desligado */ } conexoesUnsub = null; }
+}
+
 function configurarGrafoEFormularios() {
+    // Reentrada: mata as escutas anteriores antes de criar novas.
+    unsubscribeTeia();
     const isMaster = checkIsMaster();
     const sidebarTabs = document.getElementById('teia-sidebar-tabs');
 
@@ -312,7 +336,7 @@ function configurarGrafoEFormularios() {
     const select2 = document.getElementById('teia-select-npc2');
 
     // Escuta NPCs e Nós Especiais em tempo real do Firebase (Sintaxe Modular v9)
-    onSnapshot(collection(db, 'rpg_Npcs'), (snapNPCs) => {
+    npcsUnsub = onSnapshot(collection(db, 'rpg_Npcs'), (snapNPCs) => {
         listaNpcsGlobal = [];
 
         if (select1 && select2) {
@@ -347,7 +371,7 @@ function configurarGrafoEFormularios() {
     });
 
     // Escuta conexões em tempo real do Firebase (Sintaxe Modular v9)
-    onSnapshot(collection(db, 'rpg_NpcConexoes'), (snapConexoes) => {
+    conexoesUnsub = onSnapshot(collection(db, 'rpg_NpcConexoes'), (snapConexoes) => {
         listaConexoesGlobal = [];
 
         snapConexoes.forEach(docSnap => {

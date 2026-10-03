@@ -2,7 +2,9 @@
 
 import { auth, db, storage, signInWithEmailAndPassword, signOut, onAuthStateChanged, collection, getDocs, doc, getDoc, onSnapshot, query, where, orderBy, writeBatch, runTransaction, deleteField, increment, updateDoc, addDoc, serverTimestamp, setDoc } from './core/firebase.js';
 import { globalState, ADMIN_EMAIL, PLACEHOLDER_IMAGE_URL, COINS } from './core/state.js';
-import { createBonusObject, calculateMainStats, getFomeDebuffMultiplier } from './core/calculos.js';
+import { setAuthSession, canAccessTab, isAdmin as authIsAdmin, isMaster as authIsMaster, guardAdminTools } from './core/auth.js';
+import { createBonusObject, calculateMainStats, getFomeDebuffMultiplier, getXpBracket, resolvePool } from './core/calculos.js';
+import { escapeHTML } from './core/utils.js';
 import { renderPainelFichas, renderFichaEditor } from './tabs/painelFichas.js';
 import { renderRolagemDados } from './tabs/rolagemDados.js';
 import { renderCalculadoraCombate } from './tabs/calcCombate.js';
@@ -95,6 +97,19 @@ window.renderBlankPage = function (title) {
 
 // --- FUNÇÃO GLOBAL PARA EXIBIR UMA DAS 16 ABAS ---
 window.showTab = function (tabId) {
+
+    // --- PORTÃO DE AUTORIZAÇÃO ---
+    // SEGURANÇA: antes, showTab() não tinha NENHUMA checagem. A única
+    // proteção era `if (subAba.requiresAdmin && role !== 'admin')` na hora de
+    // MONTAR a barra lateral — ou seja, Bastava digitar
+    // `showTab('backoffice-content')` no console para abrir o CRUD completo de
+    // 12 coleções do mestre.
+    const access = canAccessTab(tabId);
+    if (!access.allowed) {
+        console.warn('[auth] acesso negado a aba:', tabId, '-', access.reason);
+        alert(access.reason);
+        return;
+    }
 
     // SALVA A ÚLTIMA ABA ACESSADA NO CACHE DO NAVEGADOR
     localStorage.setItem('ultimaAbaAcessada', tabId);
@@ -670,7 +685,9 @@ function populateSidebar(subAbaArray, isFichaMenu = false) {
 
     subAbaArray.forEach(subAba => {
 
-        if (subAba.requiresAdmin && globalState.userRole !== 'admin') return;
+        // Usa a mesma fonte de decisão do portão em showTab(), em vez de
+  // repetir a comparação de string aqui.
+        if (subAba.requiresAdmin && !globalState.isAdmin) return;
 
         const btn = document.createElement('button');
         btn.dataset.tabId = subAba.id;
@@ -725,27 +742,33 @@ document.addEventListener('DOMContentLoaded', () => {
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         globalState.currentUser = user;
-        globalState.isAdmin = user.email === ADMIN_EMAIL;
 
-        // --- 1. CONTROLE DE ACESSO DO MESTRE VIA ROLE DO FIREBASE ---
+        // --- 1. PAPEL DO USUÁRIO ---
+        // O papel é lido de `rpg_users/{uid}.role` e normalizado por
+        // js/core/auth.js (valores desconhecidos caem para 'jogador').
+        // NOTA DE SEGURANÇA: o documento de papel é gravável pelo próprio
+        // dono se as Rules estiverem abertas — por isso o `firestore.rules`
+        // deste projeto proíbe o usuário de alterar o próprio `role`.
         const userRef = doc(db, 'rpg_users', user.uid);
-        let role = 'jogador'; // Padrão de segurança
+        let role = 'jogador';
 
         try {
             const userSnap = await getDoc(userRef);
-            if (userSnap.exists()) {
-                role = userSnap.data().role || 'jogador';
-            }
-
-            // Força o role para admin se o email bater com o ADMIN_EMAIL configurado no state.js
-            if (globalState.isAdmin) {
-                role = 'admin';
-            }
-
-            globalState.userRole = role; // Guarda no estado global
+            if (userSnap.exists()) role = userSnap.data().role || 'jogador';
         } catch (err) {
             console.error("Erro ao buscar permissões do utilizador:", err);
         }
+
+        // Centraliza a decisão (e a auditoria) em auth.js
+        const session = setAuthSession(user, role);
+
+        globalState.userRole = session.role;
+        globalState.isAdmin = authIsAdmin();
+        globalState.isMaster = authIsMaster();
+
+        // Protege as ferramentas de admin que ficam penduradas em `window`
+        // por design (boTools, buTools, shopTools, firebaseTools, userAdminTools).
+        try { guardAdminTools(window); } catch (e) { console.warn('Falha ao aplicar guardas de admin:', e); }
 
         // Manipula visualmente os botões
         const btnAoMestre = Array.from(document.querySelectorAll('.master-nav-btn')).find(b => b.textContent.trim().includes('Mestre'));
@@ -787,7 +810,12 @@ onAuthStateChanged(auth, async (user) => {
 
         window.renderSidebarDice(); // Renderiza os dados físicos na lateral
 
-        if (typeof setupMochilaListeners === 'function') setupMochilaListeners();
+        // Os handlers são ligados UMA vez por sessão de página.
+// BUG CORRIGIDO (leak): estas funções registravam listeners delegated em
+// #mochila-content (um elemento que NUNCA é substituído) e eram chamadas de
+// novo a cada onAuthStateChanged. Um logout + login na mesma aba fazia o
+// clique num slot da mochila disparar N vezes, abrindo N painéis de ação.
+if (typeof setupMochilaListeners === 'function') setupMochilaListeners();
         if (typeof setupConstelacaoListeners === 'function') setupConstelacaoListeners();
         if (typeof setupCraftingListeners === 'function') setupCraftingListeners();
         if (typeof setupExtracaoListeners === 'function') setupExtracaoListeners();
@@ -816,8 +844,13 @@ onAuthStateChanged(auth, async (user) => {
         setTimeout(() => window.showTab(ultimaAba), 200);
 
     } else {
+        // Encerra as escutas do cabeçalho de mundo ao sair (ver disposeWorldHeader).
+    disposeWorldHeader();
         globalState.currentUser = null;
         globalState.isAdmin = false;
+        globalState.isMaster = false;
+        globalState.userRole = 'jogador';
+        setAuthSession(null);
         if (dom.auth_view) dom.auth_view.classList.remove('hidden');
         if (dom.app_view) dom.app_view.classList.add('hidden');
         if (dom.app_view) dom.app_view.classList.remove('flex');
@@ -1220,51 +1253,44 @@ window.updateGlobalBars = function () {
     document.getElementById('sidebar-char-def').textContent = Math.floor(stats.def * debuffFome);
     document.getElementById('sidebar-char-eva').textContent = Math.floor(stats.eva * debuffFome);
 
-    // Cálculos Exatos de HP e MP usando os valores processados da calculadora
-    const hpMax = stats.hpMax || 1;
-    const hpExtraMax = Number(atributos.pontosHPExtraTotal) || 0;
-    const hpShieldMax = Number(atributos.defesaCorporalNativaTotal) || 0;
-    const hpAtual = ficha.hpPersonagemBase !== undefined ? Number(ficha.hpPersonagemBase) : hpMax;
-    const hpExtraAtual = ficha.hpExtraAtual !== undefined ? Number(ficha.hpExtraAtual) : hpExtraMax;
-    const hpShieldAtual = ficha.hpShieldAtual !== undefined ? Number(ficha.hpShieldAtual) : hpShieldMax;
+    // HP/MP usam resolvePool(): ANTES esta soma "base + extra + escudo" era
+    // reescrita à mão aqui e em mais 5 lugares, com fallbacks diferentes.
+    // Com isso o mesmo personagem tinha valores distintos dependendo da aba.
+    const hpPool = resolvePool(ficha, 'hp');
+    const mpPool = resolvePool(ficha, 'mp');
 
-    const mpMax = stats.mpMax || 1;
-    const mpExtraMax = Number(atributos.pontosMPExtraTotal) || 0;
-    const mpShieldMax = Number(atributos.defesaMagicaNativaTotal) || 0;
-    const mpAtual = ficha.mpPersonagemBase !== undefined ? Number(ficha.mpPersonagemBase) : mpMax;
-    const mpExtraAtual = ficha.mpExtraAtual !== undefined ? Number(ficha.mpExtraAtual) : mpExtraMax;
-    const mpShieldAtual = ficha.mpShieldAtual !== undefined ? Number(ficha.mpShieldAtual) : mpShieldMax;
-
-    const totalHpMax = hpMax + hpExtraMax + hpShieldMax;
-    const totalHpAtual = Math.max(0, hpAtual + hpExtraAtual + hpShieldAtual);
-    const totalMpMax = mpMax + mpExtraMax + mpShieldMax;
-    const totalMpAtual = Math.max(0, mpAtual + mpExtraAtual + mpShieldAtual);
-
-    const setWidth = (id, pct) => { const el = document.getElementById(id); if (el) el.style.width = `${pct}%`; };
+    const setWidth = (id, pct) => {
+        const el = document.getElementById(id);
+        if (el) el.style.width = `${pct}%`;
+    };
+    const safePct = (v, max) => (max > 0 ? Math.min(100, Math.max(0, (v / max) * 100)) : 0);
 
     // Preenchimento Gráfico das 3 barras
-    setWidth('hdr-hp-base', Math.min(100, Math.max(0, (hpAtual / hpMax) * 100)));
-    setWidth('hdr-hp-extra', hpExtraMax > 0 ? Math.min(100, Math.max(0, (hpExtraAtual / hpExtraMax) * 100)) : 0);
-    setWidth('hdr-hp-shield', hpShieldMax > 0 ? Math.min(100, Math.max(0, (hpShieldAtual / hpShieldMax) * 100)) : 0);
+    setWidth('hdr-hp-base', safePct(hpPool.base, hpPool.maxBase));
+    setWidth('hdr-hp-extra', safePct(hpPool.extra, hpPool.maxExtra));
+    setWidth('hdr-hp-shield', safePct(hpPool.shield, hpPool.maxShield));
 
-    setWidth('hdr-mp-base', Math.min(100, Math.max(0, (mpAtual / mpMax) * 100)));
-    setWidth('hdr-mp-extra', mpExtraMax > 0 ? Math.min(100, Math.max(0, (mpExtraAtual / mpExtraMax) * 100)) : 0);
-    setWidth('hdr-mp-shield', mpShieldMax > 0 ? Math.min(100, Math.max(0, (mpShieldAtual / mpShieldMax) * 100)) : 0);
+    setWidth('hdr-mp-base', safePct(mpPool.base, mpPool.maxBase));
+    setWidth('hdr-mp-extra', safePct(mpPool.extra, mpPool.maxExtra));
+    setWidth('hdr-mp-shield', safePct(mpPool.shield, mpPool.maxShield));
 
     // Valores em Texto da soma completa
     const txtHpHdr = document.getElementById('hdr-hp-text');
-    if (txtHpHdr) txtHpHdr.textContent = `${Math.floor(totalHpAtual)}/${Math.floor(totalHpMax)}`;
+    if (txtHpHdr) txtHpHdr.textContent = `${Math.floor(hpPool.current)}/${Math.floor(hpPool.max)}`;
 
     const txtMpHdr = document.getElementById('hdr-mp-text');
-    if (txtMpHdr) txtMpHdr.textContent = `${Math.floor(totalMpAtual)}/${Math.floor(totalMpMax)}`;
+    if (txtMpHdr) txtMpHdr.textContent = `${Math.floor(mpPool.current)}/${Math.floor(mpPool.max)}`;
 
-    // Fome
-    const fomeExtra = Number(atributos.pontosFomeExtraTotal) || 0;
-    const fomeMax = Math.floor(100 + fomeExtra);
-    let fomeAtual = ficha.fomeAtual !== undefined ? Number(ficha.fomeAtual) : fomeMax;
-    if (fomeAtual > fomeMax) fomeAtual = fomeMax;
+    // Fome — o multiplicador de fome já vem validado em getFomeDebuffMultiplier
+    const fomeExtra = Number(atributos.pontosFomeExtraTotal);
+    const fomeMax = Math.max(1, Math.floor(100 + (Number.isFinite(fomeExtra) ? fomeExtra : 0)));
 
-    setWidth('bar-fome-fill', Math.max(0, Math.min(100, (fomeAtual / fomeMax) * 100)));
+    const rawFome = ficha.fomeAtual !== undefined ? Number(ficha.fomeAtual) : fomeMax;
+    const fomeAtual = Number.isFinite(rawFome)
+        ? Math.min(fomeMax, Math.max(0, rawFome))
+        : fomeMax;
+
+    setWidth('bar-fome-fill', Math.min(100, (fomeAtual / fomeMax) * 100));
 };
 
 // ==========================================
@@ -1468,54 +1494,83 @@ function renderHubMessages() {
         return;
     }
 
-    let html = '';
+    // XSS — o texto das mensagens vinha do Realtime Database e era escrito no
+    // innerHTML sem escape. Um jogador podia mandar `<img src=x onerror=...>`
+    // e o script executava no navegador de todos os outros da mesa,
+    // inclusive do Mestre (mesma origem do projeto Firebase).
+    const esc = escapeHTML;
+    const timeStr = log => log.timestamp
+        ? new Date(log.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+        : '...';
+
+    // DocumentFragment em vez de concatenar string e reatribuir o innerHTML:
+    // evita reparsear a árvore inteira a cada evento do Realtime Database.
+    const frag = document.createDocumentFragment();
+
     [...filteredLogs].reverse().forEach(log => {
-        const timeStr = log.timestamp ? new Date(log.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '...';
+        const row = document.createElement('div');
 
         if (log.tipo === 'dice') {
-            html += `
-                <div class="bg-slate-900/30 border-l-2 border-amber-500 pl-2 py-1 mb-1 flex items-center flex-wrap gap-1.5">
-                    <span class="text-sky-400 font-bold text-[9px]">${log.remetenteNome}</span>
-                    <span class="text-slate-400 text-[10px]">rolou <strong class="text-slate-200">${log.dado}</strong> <i class="fas fa-arrow-right text-[8px] text-slate-600 mx-0.5"></i></span>
-                    <span class="text-amber-400 font-black text-[12px] drop-shadow-md leading-none">${log.valor}</span>
-                    <span class="text-slate-600 text-[8px] ml-auto">${timeStr}</span>
-                </div>`;
-        }
-        else if (log.tipo === 'geral') {
-            html += `
-                <div class="bg-slate-900/50 border-l-2 border-slate-600 pl-2 py-1 mb-1">
-                    <div class="flex justify-between items-baseline mb-0.5">
-                        <span class="text-amber-500 font-bold text-[9px]">${log.remetenteNome}</span>
-                        <span class="text-slate-500 text-[8px]">${timeStr}</span>
-                    </div>
-                    <div class="text-slate-200 text-[10px] break-words leading-tight">${log.mensagem}</div>
-                </div>`;
-        }
-        else if (log.tipo === 'mestre') {
-            html += `
-                <div class="bg-red-900/20 border border-red-900/50 rounded p-2 mb-1 shadow-inner">
-                    <div class="text-red-500 font-bold text-[9px] uppercase tracking-widest mb-1 flex justify-between">
-                        <span><i class="fas fa-crown"></i> ${log.remetenteNome}</span>
-                        <span class="text-[8px] opacity-60">${timeStr}</span>
-                    </div>
-                    <div class="text-red-200 text-[10px] break-words italic leading-relaxed">${log.mensagem}</div>
-                </div>`;
-        }
-        else if (log.tipo === 'whisper') {
+            row.className = 'bg-slate-900/30 border-l-2 border-amber-500 pl-2 py-1 mb-1 flex items-center flex-wrap gap-1.5';
+            row.innerHTML = `
+                <span class="text-sky-400 font-bold text-[9px]"></span>
+                <span class="text-slate-400 text-[10px]">rolou <strong class="text-slate-200"></strong> <i class="fas fa-arrow-right text-[8px] text-slate-600 mx-0.5"></i></span>
+                <span class="text-amber-400 font-black text-[12px] drop-shadow-md leading-none"></span>
+                <span class="text-slate-600 text-[8px] ml-auto"></span>`;
+            row.children[0].textContent = log.remetenteNome || '?';
+            row.children[1].querySelector('strong').textContent = log.dado || '?';
+            row.children[2].textContent = String(log.valor ?? '');
+            row.children[3].textContent = timeStr(log);
+
+        } else if (log.tipo === 'geral') {
+            row.className = 'bg-slate-900/50 border-l-2 border-slate-600 pl-2 py-1 mb-1';
+            row.innerHTML = `
+                <div class="flex justify-between items-baseline mb-0.5">
+                    <span class="text-amber-500 font-bold text-[9px]"></span>
+                    <span class="text-slate-500 text-[8px]"></span>
+                </div>
+                <div class="text-slate-200 text-[10px] break-words leading-tight"></div>`;
+            row.children[0].children[0].textContent = log.remetenteNome || '?';
+            row.children[0].children[1].textContent = timeStr(log);
+            row.children[1].textContent = log.mensagem || '';
+
+        } else if (log.tipo === 'mestre') {
+            row.className = 'bg-red-900/20 border border-red-900/50 rounded p-2 mb-1 shadow-inner';
+            row.innerHTML = `
+                <div class="text-red-500 font-bold text-[9px] uppercase tracking-widest mb-1 flex justify-between">
+                    <span><i class="fas fa-crown"></i> <b class="font-bold"></b></span>
+                    <span class="text-[8px] opacity-60"></span>
+                </div>
+                <div class="text-red-200 text-[10px] break-words italic leading-relaxed"></div>`;
+            row.children[0].querySelector('b').textContent = log.remetenteNome || 'Mestre';
+            row.children[0].children[1].textContent = timeStr(log);
+            row.children[1].textContent = log.mensagem || '';
+
+        } else if (log.tipo === 'whisper') {
             const isMe = log.remetenteId === watcherId;
-            html += `
-                <div class="bg-purple-900/20 border-l-2 border-purple-500 pl-2 py-1 mb-1">
-                    <div class="flex justify-between items-baseline mb-0.5">
-                        <span class="text-purple-400 font-bold text-[9px]">${isMe ? 'Para: ' + log.destinatarioNome : 'De: ' + log.remetenteNome}</span>
-                        <span class="text-slate-500 text-[8px]">${timeStr}</span>
-                    </div>
-                    <div class="text-purple-200 text-[10px] break-words italic leading-tight">"${log.mensagem}"</div>
-                </div>`;
+            row.className = 'bg-purple-900/20 border-l-2 border-purple-500 pl-2 py-1 mb-1';
+            row.innerHTML = `
+                <div class="flex justify-between items-baseline mb-0.5">
+                    <span class="text-purple-400 font-bold text-[9px]"></span>
+                    <span class="text-slate-500 text-[8px]"></span>
+                </div>
+                <div class="text-purple-200 text-[10px] break-words italic leading-tight"></div>`;
+            row.children[0].children[0].textContent =
+                isMe ? `Para: ${log.destinatarioNome || '?'}` : `De: ${log.remetenteNome || '?'}`;
+            row.children[0].children[1].textContent = timeStr(log);
+            row.children[1].textContent = `"${log.mensagem || ''}"`;
+        } else {
+            return;
         }
+
+        frag.appendChild(row);
     });
 
-    container.innerHTML = html;
-    container.scrollTop = container.scrollHeight;
+    container.replaceChildren(frag);
+
+    // Só rola até o fim se o usuário já estava perto do fim (nãoFight scroll).
+    const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    if (distFromBottom < 150) container.scrollTop = container.scrollHeight;
 }
 
 // Binds de Eventos de Tela do Hub
@@ -1627,23 +1682,47 @@ window.getSessionTimeAndPeriod = function () {
     return { time, period };
 }
 
+// Unsubscribe das 4 escutas do cabeçalho de mundo.
+// BUG CORRIGIDO (leak): initWorldHeader() era chamado dentro do `if (user)`
+// do onAuthStateChanged, mas os onSnapshot nunca eram cancelados. Cada
+// login/logout na mesma sessão de aba adicionava mais 4 listeners permanentes
+// — e cada mudança no mundo disparava 4x mais renderHeaderWidget().
+// Basta sair e entrar de novo algumas vezes para multiplicar o trabalho.
+let worldUnsubs = [];
+
+function disposeWorldHeader() {
+    worldUnsubs.forEach(unsub => { try { unsub(); } catch (e) { /* já desligado */ } });
+    worldUnsubs = [];
+}
+
 function initWorldHeader() {
-    onSnapshot(doc(db, 'rpg_world_state', 'main'), (snap) => {
-        if (snap.exists()) { globalState.world.data = snap.data(); renderHeaderWidget(); }
-    });
-    onSnapshot(query(collection(db, 'rpg_locations'), orderBy('name')), (snap) => {
-        globalState.world.locations = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        if (!globalState.world.selectedLocId && globalState.world.locations.length > 0) globalState.world.selectedLocId = globalState.world.locations[0].id;
-        renderHeaderWidget();
-    });
-    onSnapshot(collection(db, 'rpg_events'), (snap) => {
-        globalState.world.events = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        renderHeaderWidget();
-    });
-    onSnapshot(collection(db, 'rpg_seasons'), (snap) => {
-        globalState.world.seasons = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        renderHeaderWidget();
-    });
+    // Garante que não haja escuta anterior viva.
+    disposeWorldHeader();
+
+    worldUnsubs.push(
+        onSnapshot(doc(db, 'rpg_world_state', 'main'), (snap) => {
+            if (snap.exists()) { globalState.world.data = snap.data(); renderHeaderWidget(); }
+        })
+    );
+    worldUnsubs.push(
+        onSnapshot(query(collection(db, 'rpg_locations'), orderBy('name')), (snap) => {
+            globalState.world.locations = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            if (!globalState.world.selectedLocId && globalState.world.locations.length > 0) globalState.world.selectedLocId = globalState.world.locations[0].id;
+            renderHeaderWidget();
+        })
+    );
+    worldUnsubs.push(
+        onSnapshot(collection(db, 'rpg_events'), (snap) => {
+            globalState.world.events = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            renderHeaderWidget();
+        })
+    );
+    worldUnsubs.push(
+        onSnapshot(collection(db, 'rpg_seasons'), (snap) => {
+            globalState.world.seasons = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            renderHeaderWidget();
+        })
+    );
 }
 
 function renderHeaderWidget() {

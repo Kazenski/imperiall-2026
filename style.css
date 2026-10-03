@@ -27,10 +27,26 @@ h1, h2, h3, h4, h5, h6, .font-cinzel {
 }
 
 /* ==========================================================================
-   AJUSTE DE ESCALA GLOBAL (ZOOM OUT TAILWIND)
+   ESCALA GLOBAL
+   ==========================================================================
+   O site foi construído com `html { font-size: 12px }` para "caber mais
+   conteúdo na tela". Isso funciona, mas tem um custo: o Tailwind define TODAS
+   as utilities de tamanho em `rem`. Com 1rem = 12px, `text-base` passa a
+   valer 12px (em vez de 16px) e `text-sm` 10.5px. Como o projeto usa
+   `text-[10px]`, `text-[9px]` e `text-[8px]` em centenas de lugares, muita
+   coisa simplesmente não responde a `text-lg`/`text-xl` aqui.
+
+   Mantido em 12px porque trocar agora altera o layout de todas as telas de
+   uma vez. O que passou a ser verdade é: **para ajustar tamanho de texto,
+   use px explicitamente**, não as utilities de escala do Tailwind.
    ========================================================================== */
 html {
-    font-size: 12px; /* Reduz a escala base do rem. Diminui tudo proporcionalmente. */
+    font-size: 12px;
+}
+
+/* Mesma sombra que o font-cinzel usa, sem depender do rem. */
+.font-cinzel {
+    font-family: 'Cinzel', Georgia, serif;
 }
 
 /* Scrollbar */
@@ -164,15 +180,47 @@ label {
     transform: translateY(-2px);
 }
 
+/* ===================================================================
+   #content-container
+
+   BUG CORRIGIDO: esta regra de ID (especificidade 1,0,0) vencia as classes
+   utilitárias do Tailwind (0,1,0). Consequências:
+     - `padding: 1.5rem` anulava o `p-0` que showTab() aplica nas telas de
+       mapa e início (o código alternava as classes e nada acontecia);
+     - `background-color` e a borda anulavam o `bg-slate-950` do HTML.
+
+   O padding agora é controlado só pelas classes utilitárias do HTML.
+   =================================================================== */
 #content-container {
-    background-color: var(--container-fundo);
     border: 1px solid var(--bordas-destaques);
-    padding: 1.5rem;
-    border-radius: 0.5rem;
     border-top-left-radius: 0;
 }
+
+/* Cabeçalhos dentro das abas.
+   Nota: `.tab-content h2` tem especificidade (0,1,1), maior que uma classe
+   utilitária isolada como `text-3xl` (0,1,0). Por isso os títulos usam
+   `!important` quando precisam de outro tamanho — em vez de competes aqui. */
+.tab-content h2 {
+    font-size: 2rem; color: var(--destaque-principal); text-align: left;
+    margin-top: 0; margin-bottom: 1.5rem; padding-bottom: 0.75rem;
+    border-bottom: 2px solid var(--borda-interna);
+}
+.tab-content h2[class*="text-"] { font-size: revert-layer; }
+
+/* ===================================================================
+   Visibilidade das abas
+
+   BUG CORRIGIDO: `.tab-content.active { display: block }` (0,2,0) vencia as
+   classes `flex flex-col` (0,1,0) usadas em ~25 abas do HTML. Na prática,
+   todas elas renderizavam como `display: block`, e o `flex flex-col` era
+   código morto — o que quebrava layouts internos (ex.: `#inicio-content`,
+   `#arena-combate-content`, `#comercio-content`).
+
+   Agora `.active` declara `display: flex` quando a aba pede flex-col.
+   =================================================================== */
 .tab-content { display: none; }
 .tab-content.active { display: block; }
+.tab-content.active.flex { display: flex; }
 
 .tab-content h2 {
     font-size: 2rem; color: var(--destaque-principal); text-align: left;
@@ -992,19 +1040,58 @@ select.std-height, input.std-height {
 .tier-badge-SS { background: linear-gradient(135deg, #000000, #7f1d1d); color: #fbbf24; border: 1px solid #fbbf24; box-shadow: 0 0 8px #fbbf24; }
 .tier-badge-unknown { display: none; }
 
-/* Barra lateral rebatível (Área Vermelha) */
+/* ===================================================================
+   #sub-menu-bar — barra de abas lateral (coluna 2)
+
+   BUG CORRIGIDO: esta regra usava `overflow: hidden` e nenhuma largura
+   rolável. O menu do Painel Admin tem 17 itens (h-11 + gap-1 ≈ 840px de
+   botões) numa caixa com a altura da viewport — os últimos itens ficavam
+   INALCANÇÁVEIS, sem barra de rolagem e sem forma de chegar neles
+   (o rótulo só aparece no :hover, que não existe em toque).
+
+   Agora a coluna é rolável e os rótulos aparecem sempre, sem depender
+   de hover. A largura expande no hover apenas como refinamento visual.
+   =================================================================== */
 #sub-menu-bar {
     width: 64px;
     height: 100%;
     background-color: #020617; /* Um tom mais escuro que o fundo */
     border-right: 1px solid #334155;
     transition: width 0.3s ease;
-    overflow: hidden;
+
+    /* Rolagem vertical em vez de overflow:hidden */
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
     z-index: 50;
 }
 
+#sub-menu-bar::-webkit-scrollbar { width: 4px; }
+#sub-menu-bar::-webkit-scrollbar-track { background: #0f172a; }
+#sub-menu-bar::-webkit-scrollbar-thumb {
+    background: #334155;
+    border-radius: 2px;
+}
+
+/* Expande ao passar o mouse (refinamento; não é mais a única forma de ler) */
 #sub-menu-bar:hover {
-    width: 200px; /* Expande ao passar o mouse */
+    width: 200px;
+}
+
+/* Em telas estreitas, o hover não existe: mantém a coluna legível
+   e sem cortar os itens. */
+@media (max-width: 768px) {
+    #sub-menu-bar {
+        width: 100%;
+        height: auto;
+        max-height: 40vh;
+        flex-direction: row;
+        overflow-x: auto;
+        overflow-y: hidden;
+        border-right: none;
+        border-bottom: 1px solid #334155;
+    }
+    #sub-menu-bar:hover { width: 100%; }
 }
 
 /* Garante que o nome da aba não quebre linha enquanto expande */
@@ -1020,9 +1107,33 @@ select.std-height, input.std-height {
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
 }
 
-/* Scrollbar Custom */
-.custom-scroll::-webkit-scrollbar { width: 4px; }
-.custom-scroll::-webkit-scrollbar-thumb { background: var(--dourado-imperiall); border-radius: 10px; }
+/* Scrollbar Custom
+   BUG CORRIGIDO: `--dourado-imperiall` NÃO é definido em :root, então
+   `background: var(--dourado-imperiall)` caía para um valor inválido e a
+   barra voltava ao cinza padrão do navegador. Passa a usar a variável
+   que existe de fato. */
+.custom-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+.custom-scroll::-webkit-scrollbar-track { background: #0f172a; }
+.custom-scroll::-webkit-scrollbar-thumb {
+    background: var(--destaque-principal, #f59e0b);
+    border-radius: 10px;
+}
+.custom-scroll::-webkit-scrollbar-thumb:hover {
+    background: #fbbf24;
+}
+
+/* Animacao usada por ~45 chamadas a `animate-fade-in` nos modulos JS.
+   Antes a classe existia apenas como `.fade-in`, entao nenhuma dessas
+   animacoes nunca executou. */
+@keyframes fade-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in { animation: fade-in 0.22s ease-out both; }
+
+@media (prefers-reduced-motion: reduce) {
+    .animate-fade-in { animation: none; }
+}
 
 /* Botões do Menu Superior */
 .nav-main-btn {
@@ -1063,10 +1174,11 @@ select.std-height, input.std-height {
     box-shadow: 0 0 10px rgba(245, 158, 11, 0.1);
 }
 
-/* Oculta o texto da calha lateral de sub-abas (Área Vermelha) quando o mouse não está sobre ela */
-#sub-menu-bar:not(:hover) span {
-    display: none;
-}
+/* Rótulos da barra de sub-abas aparecem sempre.
+   Antes ficavam `display: none` fora do :hover, o que deixava a coluna como
+   um trilho de ícones sem rótulo — e em dispositivos de toque (sem hover)
+   ficava permanentemente sem rótulo. Como a coluna agora rola na vertical,
+   não há mais aperto que exija esconder o texto. */
 
 /* --- BOTÕES DE DADOS DA SIDEBAR FIXA --- */
 .dice-quick-btn {

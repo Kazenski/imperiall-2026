@@ -6,9 +6,52 @@ export function createBonusObject() {
 }
 
 export function calculateLevelFromXP(xp = 0) {
+    return getXpBracket(xp).level;
+}
+
+/**
+ * Fonte ÚNICA da verdade sobre nível + barra de XP.
+ *
+ * BUG CORRIGIDO (off-by-one): a barra de XP da ficha usava uma busca ASCENDENTE
+ * ("se xp < requisito do nível N, então sou o nível N") e sobrava sempre um nível
+ * a mais. Ex.: tabela 1→0 XP, 2→100 XP, 3→300 XP; com 150 XP a barra dizia
+ * "Nvl 3" enquanto TODOS os cálculos de status usavam nível 2.
+ *
+ * Semântica de `experienciaParaProximoNivel`: XP acumulado necessário para
+ * atingir aquele nível (1→0, 2→100, 3→300...). Logo o nível atual é o MAIOR
+ * nível cujo requisito já foi alcançado.
+ */
+export function getXpBracket(xp = 0) {
     const t = globalState.cache.tabela_xp;
-    if(!t?.niveis) return 1;
-    return Object.keys(t.niveis).map(Number).sort((a,b)=>b-a).find(l => xp >= (t.niveis[l]?.experienciaParaProximoNivel||0)) || 1;
+    const safeXp = Number.isFinite(Number(xp)) ? Number(xp) : 0;
+
+    if (!t?.niveis) return { level: 1, floor: 0, ceiling: 1000, pct: 0, isMaxLevel: false };
+
+    const levels = Object.keys(t.niveis).map(Number).sort((a, b) => a - b);
+    if (levels.length === 0) return { level: 1, floor: 0, ceiling: 1000, pct: 0, isMaxLevel: false };
+
+    let currentLevel = levels[0];
+    for (const lvl of levels) {
+        const req = Number(t.niveis[lvl]?.experienciaParaProximoNivel) || 0;
+        if (safeXp >= req) currentLevel = lvl;
+        else break;
+    }
+
+    const idx = levels.indexOf(currentLevel);
+    const isMaxLevel = idx === levels.length - 1;
+
+    const floor = Number(t.niveis[currentLevel]?.experienciaParaProximoNivel) || 0;
+    const ceiling = isMaxLevel
+        ? floor
+        : (Number(t.niveis[levels[idx + 1]]?.experienciaParaProximoNivel) || floor + 1000);
+
+    // Guarda contra divisão por zero em tabelas malformadas (incremento 0).
+    const span = ceiling - floor;
+    const pct = (isMaxLevel || span <= 0)
+        ? 100
+        : Math.min(100, Math.max(0, ((safeXp - floor) / span) * 100));
+
+    return { level: currentLevel, floor, ceiling, pct, isMaxLevel };
 }
 
 export function sumXpTableBonuses(lvl) {
@@ -19,12 +62,20 @@ export function sumXpTableBonuses(lvl) {
 export function getFomeDebuffMultiplier(ficha) {
     if (!ficha) return 1;
     const atributos = ficha.atributosBasePersonagem || {};
-    const fomeExtra = Number(atributos.pontosFomeExtraTotal) || 0;
-    const fomeMax = Math.floor(100 + fomeExtra);
-    const fomeAtual = ficha.fomeAtual !== undefined ? Number(ficha.fomeAtual) : fomeMax;
-    
-    if (fomeAtual >= 50) return 1; 
-    return Math.max(0, fomeAtual) / 100; 
+
+    // pontosFomeExtraTotal é um MODIFICADOR (ratio), não um valor absoluto.
+    const rawFomeExtra = Number(atributos.pontosFomeExtraTotal);
+    const fomeExtra = Number.isFinite(rawFomeExtra) ? rawFomeExtra : 0;
+
+    const fomeMax = Math.max(1, Math.floor(100 + fomeExtra));
+
+    const rawAtual = ficha.fomeAtual !== undefined ? Number(ficha.fomeAtual) : fomeMax;
+    // BUG CORRIGIDO: fomeAtual = "abc" produzia NaN, que atravessava a
+    // multiplicação e imprimia literalmente "HIT! NaN" no log de combate.
+    const fomeAtual = Number.isFinite(rawAtual) ? rawAtual : fomeMax;
+
+    if (fomeAtual >= 50) return 1;
+    return Math.max(0, Math.min(1, fomeAtual / 100));
 }
 
 export function calculateWeightStats(ficha, level) {
@@ -236,25 +287,33 @@ export function calculateStatCascade(ficha, field, change) {
     const extraKeyAtual = isHP ? 'hpExtraAtual' : 'mpExtraAtual';
     const maxBaseKey = isHP ? 'hpMaxPersonagemBase' : 'mpMaxPersonagemBase';
 
-    let maxBase = Number(ficha[maxBaseKey]) || 1;
-    let maxShield = Number(atributos[shieldKeyMax]) || 0;
-    let maxExtra = Number(atributos[extraKeyMax]) || 0;
+    let maxBase = Number(ficha[maxBaseKey]);
+    if (!Number.isFinite(maxBase)) maxBase = 0;
+    let maxShield = Number(atributos[shieldKeyMax]);
+    if (!Number.isFinite(maxShield)) maxShield = 0;
+    let maxExtra = Number(atributos[extraKeyMax]);
+    if (!Number.isFinite(maxExtra)) maxExtra = 0;
 
-    let atualBase = Number(ficha[baseKey]) || 0;
-    let atualShield = ficha[shieldKeyAtual] !== undefined ? Number(ficha[shieldKeyAtual]) : maxShield;
-    let atualExtra = ficha[extraKeyAtual] !== undefined ? Number(ficha[extraKeyAtual]) : maxExtra;
+    const safe = (v, fallback) => { const n = Number(v); return Number.isFinite(n) ? n : fallback; };
+
+    let atualBase = safe(ficha[baseKey], 0);
+    let atualShield = ficha[shieldKeyAtual] !== undefined ? safe(ficha[shieldKeyAtual], maxShield) : maxShield;
+    let atualExtra = ficha[extraKeyAtual] !== undefined ? safe(ficha[extraKeyAtual], maxExtra) : maxExtra;
 
     if (change < 0) {
         let damage = Math.abs(change);
         if (damage > 0 && atualShield > 0) {
-            if (atualShield >= damage) { atualShield -= damage; damage = 0; } 
+            if (atualShield >= damage) { atualShield -= damage; damage = 0; }
             else { damage -= atualShield; atualShield = 0; }
         }
         if (damage > 0 && atualExtra > 0) {
-            if (atualExtra >= damage) { atualExtra -= damage; damage = 0; } 
+            if (atualExtra >= damage) { atualExtra -= damage; damage = 0; }
             else { damage -= atualExtra; atualExtra = 0; }
         }
-        if (damage > 0) atualBase -= damage;
+        // BUG CORRIGIDO: faltava o clamp. O HP podia ficar NEGATIVO e esse
+        // total era gravado no token da arena (a barra % ficava 0, mas o
+        // número exibido era "-37"). Agora o pool base nunca fica abaixo de 0.
+        if (damage > 0) atualBase = Math.max(0, atualBase - damage);
     } 
     else if (change > 0) {
         let heal = change;
@@ -340,10 +399,75 @@ export function calculateReputationUsage(ficha) {
     return { total: totalCap, used: used, available: totalCap - used, colecao: repColecao };
 }
 
+/**
+ * Resolve o "pool" de HP ou MP de uma ficha, normalizando base / extra / escudo.
+ *
+ * ANTES essa soma "base + extra + shield" estava duplicada em 6 lugares
+ * (arena.js ×4, habilidades.js, main.js) com fallbacks diferentes — logo,
+ * o mesmo personagem tinha valores diferentes dependendo da aba aberta.
+ *
+ * @param {object} ficha
+ * @param {'hp'|'mp'} pool
+ */
+export function resolvePool(ficha, pool = 'hp') {
+    const isHP = pool === 'hp';
+    const attrs = ficha?.atributosBasePersonagem || {};
+
+    const num = (v, fallback) => { const n = Number(v); return Number.isFinite(n) ? n : fallback; };
+
+    const maxBase = num(ficha?.[isHP ? 'hpMaxPersonagemBase' : 'mpMaxPersonagemBase'], 0);
+    const maxShield = num(attrs[isHP ? 'defesaCorporalNativaTotal' : 'defesaMagicaNativaTotal'], 0);
+    const maxExtra = num(attrs[isHP ? 'pontosHPExtraTotal' : 'pontosMPExtraTotal'], 0);
+
+    const base = num(ficha?.[isHP ? 'hpPersonagemBase' : 'mpPersonagemBase'], maxBase);
+    const shield = ficha?.[isHP ? 'hpShieldAtual' : 'mpShieldAtual'] !== undefined
+        ? num(ficha[isHP ? 'hpShieldAtual' : 'mpShieldAtual'], maxShield)
+        : maxShield;
+    const extra = ficha?.[isHP ? 'hpExtraAtual' : 'mpExtraAtual'] !== undefined
+        ? num(ficha[isHP ? 'hpExtraAtual' : 'mpExtraAtual'], maxExtra)
+        : maxExtra;
+
+    const current = Math.max(0, base + shield + extra);
+    const max = Math.max(0, maxBase + maxShield + maxExtra);
+
+    return { base, shield, extra, current, max, maxBase, maxShield, maxExtra };
+}
+
+/**
+ * Converte um total em cobre para a tripla de moedas, sem perder resto.
+ * A taxa e 1 ouro = 10 prata = 100 cobre (COINS.val), sem hardcode.
+ *
+ * Substitui as DUAS copias que existiam (utils.js e reputacao.js).
+ */
+export function optimizeCoinsGuard(totalCobre) {
+    let remaining = Number(totalCobre);
+    if (!Number.isFinite(remaining) || remaining <= 0) return { gold: 0, silver: 0, bronze: 0 };
+
+    remaining = Math.floor(remaining);
+
+    const nGold = Math.floor(remaining / COINS.GOLD.val);
+    remaining %= COINS.GOLD.val;
+
+    const nSilver = Math.floor(remaining / COINS.SILVER.val);
+    remaining %= COINS.SILVER.val;
+
+    return { gold: nGold, silver: nSilver, bronze: remaining };
+}
+
+/** Atalho: HP atual e máximo. */
+export function getHpPool(ficha) { return resolvePool(ficha, 'hp'); }
+
+/** Atalho: MP atual e máximo. */
+export function getMpPool(ficha) { return resolvePool(ficha, 'mp'); }
+
 export function getWallet(ficha) {
     if(!ficha || !ficha.mochila) return { gold:0, silver:0, bronze:0, total:0 };
-    const g = Number(ficha.mochila[COINS.GOLD.id] || 0);
-    const s = Number(ficha.mochila[COINS.SILVER.id] || 0);
-    const b = Number(ficha.mochila[COINS.BRONZE.id] || 0);
-    return { gold: g, silver: s, bronze: b, total: (g * 100) + (s * 10) + (b * 1) };
+    const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+    const g = num(ficha.mochila[COINS.GOLD.id]);
+    const s = num(ficha.mochila[COINS.SILVER.id]);
+    const b = num(ficha.mochila[COINS.BRONZE.id]);
+    return {
+        gold: g, silver: s, bronze: b,
+        total: (g * COINS.GOLD.val) + (s * COINS.SILVER.val) + (b * COINS.BRONZE.val)
+    };
 }

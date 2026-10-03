@@ -1,0 +1,79 @@
+rules_version = '2';
+
+// ===========================================================================
+// STORAGE RULES — Imperiall 2026
+// ===========================================================================
+//
+// Publicar com:  firebase deploy --only storage
+//
+// As imagens de personagem, itens, pets e mapas ficam no Storage.
+// O padrão é: leitura liberada (o app mostra itens a todos), escrita
+// somente para quem tem o papel de mestre/admin.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdminEmail() {
+      return isSignedIn()
+        && request.auth.token.email == 'kazenski.developer@gmail.com';
+    }
+
+    function myRole() {
+      return firestore.get(/databases/(default)/documents/rpg_users/$(request.auth.uid)).data.role;
+    }
+
+    function isMaster() {
+      return isSignedIn() && (isAdminEmail() || myRole() == 'mestre' || myRole() == 'admin');
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (isAdminEmail() || myRole() == 'admin');
+    }
+
+    // Apenas imagens e com tamanho razoável.
+    function isImage() {
+      return request.resource.contentType.matches('image/.*');
+    }
+
+    function underSize(maxBytes) {
+      return request.resource.size < maxBytes;
+    }
+
+    // ---- Mapas da arena (upload do Mestre) ----
+    match /mapas_arena/{sessionId}/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isMaster() && isImage() && underSize(10 * 1024 * 1024);
+    }
+
+    // ---- Imagens de personagem ----
+    match /fichas/{uid}/{fileName} {
+      allow read: if isSignedIn();
+      // O jogador escreve apenas no próprio diretório.
+      allow write: if (isMaster() || isSignedIn() && request.auth.uid == uid)
+                   && isImage() && underSize(5 * 1024 * 1024);
+    }
+
+    // ---- Imagens de itens, pets, habilidades, deuses ----
+    match /itens/{fileName}       { allow read: if isSignedIn(); allow write: if isMaster() && isImage() && underSize(5 * 1024 * 1024); }
+    match /pets/{fileName}        { allow read: if isSignedIn(); allow write: if isMaster() && isImage() && underSize(5 * 1024 * 1024); }
+    match /habilidades/{fileName} { allow read: if isSignedIn(); allow write: if isMaster() && isImage() && underSize(5 * 1024 * 1024); }
+    match /deuses/{fileName}      { allow read: if isSignedIn(); allow write: if isMaster() && isImage() && underSize(5 * 1024 * 1024); }
+    match /noticias/{fileName}    { allow read: if isSignedIn(); allow write: if isMaster() && isImage() && underSize(5 * 1024 * 1024); }
+    match /constelacoes/{fileName}{ allow read: if isSignedIn(); allow write: if isMaster() && isImage() && underSize(5 * 1024 * 1024); }
+    match /npcs/{fileName}        { allow read: if isSignedIn(); allow write: if isMaster() && isImage() && underSize(5 * 1024 * 1024); }
+    match /lojas/{fileName}       { allow read: if isSignedIn(); allow write: if isMaster() && isImage() && underSize(5 * 1024 * 1024); }
+
+    // ---- Assets do site (favicon, maps) ----
+    match /atualizacoes_sistema/{fileName} { allow read: if true; allow write: if isAdmin() && underSize(5 * 1024 * 1024); }
+
+    // ---- Trava de segurança ----
+    match /{allPaths=**} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+  }
+}

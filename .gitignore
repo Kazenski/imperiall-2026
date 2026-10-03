@@ -1,0 +1,33 @@
+# Dependências
+node_modules/
+npm-debug.log*
+yarn-error.log*
+package-lock.json.bak
+
+# Firebase / regras compiladas
+.firebase/
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
+database-debug.log*
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editores
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Ambiente local — NÃO versionar
+.env
+.env.local
+*.local
+
+# Builds temporários
+.cache/
+*.tmp
+*.log

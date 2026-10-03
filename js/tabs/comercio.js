@@ -314,7 +314,7 @@ export function renderComercioTab(isLoading = false) {
                                         <input type="number" class="qty-input" value="${myQty}" onchange="window.setBuyQtyDirect('${item.id}', this.value, ${item.estoqueAtual})">
                                         <div class="qty-btn hover:bg-slate-700" onclick="window.adjustBuyQty('${item.id}', 1, ${item.estoqueAtual})">+</div>
                                     </div>
-                                    <button onclick="window.executeBuy('${item.id}', ${item.precoCompra}, '${itemNameSafe.replace(/'/g, "\\'")}')" class="w-full py-2 rounded text-xs font-bold uppercase transition-all ${canBuy ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-slate-700 text-slate-500 cursor-not-allowed'}" ${!canBuy ? 'disabled' : ''}>Comprar (${totalCost})</button>
+                                    <button data-buy-item="${item.id}" class="w-full py-2 rounded text-xs font-bold uppercase transition-all ${canBuy ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-slate-700 text-slate-500 cursor-not-allowed'}" ${!canBuy ? 'disabled' : ''}>Comprar (${totalCost})</button>
                                 </div>
                             </div>
                         </div>`;
@@ -394,7 +394,9 @@ export function renderComercioTab(isLoading = false) {
                 
                 itemsToShow.forEach(item => {
                     const currentSel = globalState.commerce.sellQuantities[item.id] || 0;
-                    const sellPrice = Math.floor(item.basePrice * 0.50);
+                    // Espelha a regra executada em executeSellBatch (SELL_RATE), para o valor
+            // mostrado na tela ser o mesmo que será creditado.
+            const sellPrice = Math.max(1, Math.floor(item.basePrice * SELL_RATE));
                     totalSellValue += sellPrice * currentSel;
                     
                     const borderClass = currentSel > 0 ? 'border-emerald-500 ring-1 ring-emerald-500/50' : 'border-slate-700';
@@ -495,6 +497,21 @@ window.setBuyQtyDirect = function(id, val, max) {
     renderComercioTab();
 };
 
+/**
+ * Delegated click para os botoes de compra.
+ *
+ * Evita interpolar o id do item dentro de um `onclick="..."`. Mesmo com
+ * escapeHTML, o parser HTML decodifica o valor do atributo ANTES de o JS
+ * ser avaliado, devolvendo as aspas e reabrindo o breakout — ou seja,
+ * escapar não protege nesse contexto.
+ */
+document.addEventListener('click', function (e) {
+    const btn = e.target.closest('[data-buy-item]');
+    if (!btn) return;
+    const itemId = btn.dataset.buyItem;
+    if (itemId) window.executeBuy(itemId);
+});
+
 window.setSellQty = function(id, val, max) {
     const num = parseInt(val);
     if (isNaN(num)) return;
@@ -503,64 +520,127 @@ window.setSellQty = function(id, val, max) {
     renderComercioTab(); 
 };
 
-// Funções de Banco (Compra / Venda / Câmbio)
-window.executeBuy = async function(itemId, unitPrice, itemName) {
-    const qty = globalState.commerce.buyQuantities[itemId] || 1;
-    const totalCostCP = unitPrice * qty; 
+/**
+ * Taxa de revenda: a loja paga esta fração do preço pelo qual ela vende.
+ * Mantido em UMA constante — antes o `0.50` aparecia hardcoded em 4 lugares
+ * (UI, execução da venda, gerador de estoque e cadastro de loja).
+ */
+const SELL_RATE = 0.5;
+
+/**
+ * Compra de item.
+ *
+ * SEGURANCA — o preço NÃO vem mais do cliente.
+ *
+ * Antes a assinatura era `executeBuy(itemId, unitPrice, itemName)` e o preço
+ * vinha do argumento, que é um valor que o usuário controla (pode chamar
+ * `window.executeBuy('id', 0, 'x')` no console e comprar tudo de graça).
+ * Além disso, `unitPrice === undefined` produzia `NaN`, e como `NaN > 0` é
+ * falso, as três chaves de moeda eram DELETADAS — a carteira era apagada e
+ * o item era entregue mesmo assim.
+ *
+ * Agora o preço é lido do próprio documento da loja dentro da transação, e
+ * quantidade/preço são validados antes de qualquer escrita.
+ *
+ * @param {string} itemId
+ * @param {string} [itemName] apenas para a mensagem de erro (não confiável)
+ */
+window.executeBuy = async function(itemId, itemName) {
+    // Quantidade precisa ser um inteiro positivo e finito.
+    const rawQty = Number(globalState.commerce.buyQuantities[itemId]);
+    const qty = Number.isInteger(rawQty) && rawQty > 0 ? rawQty : 1;
+
     const charId = globalState.selectedCharacterId;
     const shopId = globalState.commerce.selectedShopId;
-    const charData = globalState.selectedCharacterData.ficha;
-    const wallet = getWallet(charData);
+    const charData = globalState.selectedCharacterData?.ficha;
 
-    if (wallet.total < totalCostCP) return alert(`Saldo insuficiente! Custa ${totalCostCP} CP.`);
+    if (!charId || !charData) return alert('Selecione um personagem primeiro.');
+    if (!shopId) return alert('Selecione uma loja primeiro.');
+
+    const wallet = getWallet(charData);
 
     try {
         await runTransaction(db, async (t) => {
             const charRef = doc(db, "rpg_fichas", charId);
             const shopRef = doc(db, "rpg_lojas", shopId);
-            
+
             const cDoc = await t.get(charRef);
             const sDoc = await t.get(shopRef);
-            
-            if(!sDoc.exists()) throw "Loja indisponível.";
+
+            if (!sDoc.exists()) throw "Loja indisponível.";
             const sData = sDoc.data();
-            
+
             const estoqueLoja = sData.itensEstoque || {};
             const itemNaLoja = estoqueLoja[itemId];
 
-            if (!itemNaLoja) throw "Este item não está mais disponível na loja (Erro de Sincronia). Atualize a página.";
-            if (itemNaLoja.estoqueAtual < qty) throw "Estoque insuficiente na loja.";
+            if (!itemNaLoja) throw "Este item não está mais disponível na loja. Atualize a página.";
 
-            const sm = cDoc.data().mochila || {};
-            const sTotal = ((sm[COINS.GOLD.id]||0)*100) + ((sm[COINS.SILVER.id]||0)*10) + (sm[COINS.BRONZE.id]||0);
-            if (sTotal < totalCostCP) throw "Saldo insuficiente no servidor.";
+            // ---- PREÇO AUTORITATIVO: vem do documento da loja ----
+            const unitPrice = Number(itemNaLoja.precoCompra);
+            if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
+                throw "Preço inválido para este item. Avise o Mestre.";
+            }
+
+            const stock = Number(itemNaLoja.estoqueAtual);
+            if (!Number.isFinite(stock) || stock < qty) throw "Estoque insuficiente na loja.";
+
+            const totalCostCP = unitPrice * qty;
+            if (!Number.isFinite(totalCostCP) || totalCostCP <= 0) {
+                throw "Custo inválido para esta compra. Avise o Mestre.";
+            }
+
+            const sm = cDoc.exists() ? (cDoc.data().mochila || {}) : {};
+            const sTotal = getWallet({ mochila: sm }).total;
+
+            if (sTotal < totalCostCP) {
+                throw `Saldo insuficiente! Você tem ${sTotal} CP e a compra custa ${totalCostCP} CP.`;
+            }
 
             const finalCP = sTotal - totalCostCP;
             const finalCoins = optimizeCoins(finalCP);
             const newMochila = { ...sm };
-            
-            if(finalCoins.gold > 0) newMochila[COINS.GOLD.id] = finalCoins.gold; else delete newMochila[COINS.GOLD.id];
-            if(finalCoins.silver > 0) newMochila[COINS.SILVER.id] = finalCoins.silver; else delete newMochila[COINS.SILVER.id];
-            if(finalCoins.bronze > 0) newMochila[COINS.BRONZE.id] = finalCoins.bronze; else delete newMochila[COINS.BRONZE.id];
-            
-            newMochila[itemId] = (newMochila[itemId] || 0) + qty;
+
+            if (finalCoins.gold > 0) newMochila[COINS.GOLD.id] = finalCoins.gold;
+            else delete newMochila[COINS.GOLD.id];
+            if (finalCoins.silver > 0) newMochila[COINS.SILVER.id] = finalCoins.silver;
+            else delete newMochila[COINS.SILVER.id];
+            if (finalCoins.bronze > 0) newMochila[COINS.BRONZE.id] = finalCoins.bronze;
+            else delete newMochila[COINS.BRONZE.id];
+
+            newMochila[itemId] = (Number(newMochila[itemId]) || 0) + qty;
 
             t.update(charRef, { mochila: newMochila });
-            t.update(shopRef, { 
+            t.update(shopRef, {
                 [`itensEstoque.${itemId}.estoqueAtual`]: increment(-qty),
-                caixaAtual: increment(totalCostCP) 
+                caixaAtual: increment(totalCostCP)
             });
         });
 
         globalState.commerce.buyQuantities[itemId] = 1;
-        renderComercioTab(); 
+        renderComercioTab();
 
     } catch (e) {
         console.error(e);
-        alert("Erro na compra: " + e);
+        alert(typeof e === 'string' ? e : ("Erro na compra: " + e));
     }
 };
 
+/**
+ * Venda em lote.
+ *
+ * SEGURANCA — o preço de venda NÃO vem mais do cache do cliente.
+ *
+ * Antes, `basePrice` era lido de `globalState.cache.itemConfig`, que é um
+ * objeto JS comum que o usuário controla: bastava reescrever o cache no
+ * console (ou chamar a função direto) para definir qualquer preço de venda.
+ * O limite era apenas o caixa da loja — dinheiro infinito.
+ *
+ * Agora o preço de venda é derivado do `precoCompra` que a própria loja tem
+ * gravado no documento dela, lido dentro da transação.
+ *
+ * @param {number} [totalValueCP] valor apenas para conferir com o servidor
+ *        (mantido na assinatura porque a UI já o passa; antes era ignorado)
+ */
 window.executeSellBatch = async function(totalValueCP) {
     const charId = globalState.selectedCharacterId;
     const shopId = globalState.commerce.selectedShopId;
@@ -620,34 +700,54 @@ window.executeSellBatch = async function(totalValueCP) {
             let totalValue = 0;
 
             for (const [itemId, qty] of itemsToSell) {
-                if ((serverMochila[itemId] || 0) < qty) throw "Você não possui essa quantidade no servidor.";
-                
-                const config = globalState.cache.itemConfig ? globalState.cache.itemConfig.get(itemId) : null;
-                // Amplia a busca para allItems aqui também
-                const baseItem = globalState.cache.itens?.get(itemId) || globalState.cache.allItems?.get(itemId);
-                const basePrice = Number(config?.basePrice || baseItem?.precoBase || 0);
-                const sellPrice = Math.floor(basePrice * 0.50);
-                
+                if (!Number.isInteger(qty) || qty <= 0) throw "Quantidade inválida.";
+
+                const owned = Number(serverMochila[itemId]) || 0;
+                if (owned < qty) throw "Você não possui essa quantidade no servidor.";
+
+                // ---- PREÇO AUTORITATIVO ----
+                // Tenta (1) o preco que a propria loja ja tem gravado para o
+                // item; (2) a tabela mestra de precos. O cache do cliente
+                // NAO e consultado para nada que afete dinheiro.
+                const masterPriceDoc = await t.get(doc(db, "rpg_balanceamento_itens_precos_geral", itemId));
+                const masterData = masterPriceDoc.exists() ? masterPriceDoc.data() : null;
+
+                const shopEntry = serverEstoque[itemId];
+                const candidateBuy = Number(shopEntry?.precoCompra ?? masterData?.basePrice);
+                const basePrice = Number.isFinite(candidateBuy) && candidateBuy > 0 ? candidateBuy : 0;
+
+                // Regra de ouro: a loja sempre recompra por MENOS do que vende.
+                // Derivando do precoCompra da propria loja, o ciclo
+                // comprar -> vender na mesma loja deixa de ser lucrativo
+                // (antes havia arbitragem quando o precoCompra sorteado
+                // ficava abaixo de 50% do precoBase do mestre).
+                const sellPrice = Math.max(1, Math.floor(basePrice * SELL_RATE));
+
+                if (sellPrice >= basePrice) {
+                    throw "Preço de venda inválido para este item. Avise o Mestre.";
+                }
+
                 totalValue += (sellPrice * qty);
 
-                serverMochila[itemId] -= qty;
-                if(serverMochila[itemId] <= 0) delete serverMochila[itemId];
+                serverMochila[itemId] = owned - qty;
+                if (serverMochila[itemId] <= 0) delete serverMochila[itemId];
 
-                if (serverEstoque[itemId]) {
-                    serverEstoque[itemId].estoqueAtual += qty;
+                if (shopEntry) {
+                    shopEntry.estoqueAtual = (Number(shopEntry.estoqueAtual) || 0) + qty;
+                    shopEntry.precoVenda = sellPrice;
                 } else {
-                    const itemTierStr = (config ? config.tierId : null) || (baseItem ? baseItem.tier : null) || "F";
-                    // Fallback da imagem na hora de salvar o estoque novo
-                    const safeImg = config?.imagemUrl || baseItem?.imagemUrl || baseItem?.imageUrl || PLACEHOLDER_IMAGE_URL;
+                    // Item novo no estoque da loja: os metadados vem do
+                    // documento mestre, ainda sim lido do servidor.
+                    const safeImg = masterData?.imagemUrl || PLACEHOLDER_IMAGE_URL;
 
                     serverEstoque[itemId] = {
-                        nome: (config ? config.nome : null) || (baseItem ? baseItem.nome : "Item sem nome"),
+                        nome: masterData?.nome || 'Item sem nome',
                         imagemUrl: safeImg,
                         estoqueAtual: qty,
                         estoqueMaximo: qty,
                         precoCompra: basePrice,
                         precoVenda: sellPrice,
-                        tierId: itemTierStr,
+                        tierId: masterData?.tierId || 'F',
                         slotsOcupados: 1
                     };
                 }

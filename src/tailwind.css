@@ -1,0 +1,8 @@
+/* ARQUIVO: src/tailwind.css
+ * Entrada do Tailwind. O resultado compilado vai para tailwind.css (na raiz).
+ * O preflight fica desligado no tailwind.config.js de proposito, porque o
+ * style.css ja faz o reset e tem regras de ID que conflitariam com ele. */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

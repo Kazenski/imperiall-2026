@@ -1,15 +1,99 @@
 import { db, storage, doc, updateDoc, setDoc, onSnapshot, runTransaction, arrayUnion, arrayRemove, deleteField, ref, uploadBytes, getDownloadURL, deleteObject } from '../core/firebase.js';
 import { globalState, PLACEHOLDER_IMAGE_URL } from '../core/state.js';
 import { escapeHTML } from '../core/utils.js';
-import { calculateStatCascade, getFomeDebuffMultiplier } from '../core/calculos.js';
+import { calculateStatCascade, getFomeDebuffMultiplier, resolvePool } from '../core/calculos.js';
+import {
+    COMBAT_RULES, rollAttack, resolveActor, getEffectiveMovement,
+    getStat, resolveSkillBaseDamage, tokenDistance, isWithinSkillRange
+} from '../core/combate.js';
+import {
+    HEX_SIZE, GRID_ROWS, GRID_COLS, gridToAxial,
+    hexDistance, hexToPixel, pixelToHex, hexRound, getHexPoints,
+    hexesInRadius, getReachableHexes, isInsideGrid
+} from '../core/hex.js';
 
 // --- CONFIGURAÇÕES TÉCNICAS DO GRID ---
 const IMG_PLACEHOLDER_BASE64 = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'%3E%3C/svg%3E";
-const HEX_SIZE = 17;
-const HEX_WIDTH = Math.sqrt(3) * HEX_SIZE;
-const HEX_HEIGHT = 2 * HEX_SIZE;
-const GRID_ROWS = 40; 
-const GRID_COLS = 40;
+
+// ============================================================================
+// HELPERS LOCAIS (fora do objeto window.arena para manter o codigo testavel)
+// ============================================================================
+
+/**
+ * Devolve a ficha do alvo, para que DEF/EVA possam ser lidos.
+ * Aceita jogador, monstro ou NPC. Retorna null se nao houver cache.
+ */
+function lookupDefenderSheet(token) {
+    if (!token) return null;
+    const id = token.originId;
+    if (!id) return null;
+
+    if (token.originCollection === 'rpg_fichasNPCMonstros') {
+        return globalState.cache.mobs.get(id) || null;
+    }
+    if (token.originCollection === 'rpg_Npcs') {
+        return globalState.cache.npcs.get(id) || null;
+    }
+    const p = globalState.cache.all_personagens.get(id)
+           || globalState.cache.personagens.get(id)
+           || null;
+    return p ? (p.ficha || p) : null;
+}
+
+/**
+ * Monta o conjunto de celulas intransponiveis: muros E outros tokens.
+ * Muros "soft" (transparentes) sao atravessaveis.
+ */
+function buildBlockedSet(arenaState, ignoreTokenId = null) {
+    const set = new Set();
+
+    for (const [key, tipo] of Object.entries(arenaState?.obstaculos || {})) {
+        if (tipo === 'soft') continue;   // muro transparente nao bloqueia
+        set.add(key);
+    }
+
+    for (const [tid, tok] of Object.entries(arenaState?.tokens || {})) {
+        if (tid === ignoreTokenId) continue;
+        if (![tok?.q, tok?.r].every(Number.isFinite)) continue;
+        set.add(`${tok.q},${tok.r}`);
+    }
+
+    return set;
+}
+
+/** Resumo curto de uma rolagem, para o log de combate. */
+function formatRollSummary(result) {
+    if (!result) return 'sem dados';
+    if (result.missed) {
+        return `D20 ${result.d20} - EVA ${result.targetEva} = ${result.hitRoll} (falhou: min ${COMBAT_RULES.HIT_THRESHOLD})`;
+    }
+    const parts = [`D20 ${result.d20}`];
+    parts.push(`Base ${result.baseDamage}`);
+    parts.push(`${result.statIcon} ${result.effectiveStat}`);
+    let out = parts.join(' + ');
+    if (result.mitigation > 0) out += ` - 🛡️ ${result.mitigation}`;
+    out += ` = ${result.damage}`;
+    if (result.isDebuffed) out += ' 🍞';
+    return out;
+}
+
+/** Linha de log de combate para um ataque de alvo unico. */
+function buildAttackLog({ actorName, skillName, targetName, result }) {
+    const safeActor = escapeHTML(actorName);
+    const safeSkill = escapeHTML(skillName);
+    const safeTarget = escapeHTML(targetName);
+
+    if (result.missed) {
+        return `⚔️ <strong class="text-emerald-400">${safeActor}</strong> tentou <span class="text-amber-400">${safeSkill}</span> em <strong class="text-red-400">${safeTarget}</strong>.<br>` +
+               `<span class="text-slate-400">Esquiva: D20 ${result.d20} - EVA ${result.targetEva} = ${result.hitRoll} (min ${COMBAT_RULES.HIT_THRESHOLD}) — ERROU!</span>`;
+    }
+
+    return `⚔️ <strong class="text-emerald-400">${safeActor}</strong> lançou <span class="text-amber-400">${safeSkill}</span> em <strong class="text-red-400">${safeTarget}</strong>.<br>` +
+           `Rolagem: ${escapeHTML(formatRollSummary(result))} ` +
+           `= <span class="text-xl font-bold text-white border-b border-red-500">${result.damage}</span>` +
+           (result.mitigation > 0 ? ` <span class="text-[10px] text-sky-400">(mitigado: ${result.mitigation})</span>` : '') +
+           (result.isDebuffed ? ` <span class="text-[10px] text-red-500" title="Debuff de Fome Ativo!"><i class="fas fa-drumstick-bite"></i></span>` : '');
+}
 
 window.arena = { 
     data: null, 
@@ -25,6 +109,12 @@ window.arena = {
     drag: { active: false, startX: 0, startY: 0, panX: 0, panY: 0 },
     targeting: null,
     turnActions: { movement: false, action: false, free: false },
+
+    // Cache incremental de muros: evita reescrever class em 1600 hexes
+    // a cada snapshot do Firestore.
+    _wallKeys: {},
+    // Elemento <svg> ao qual os handlers de canvas estao ligados.
+    _boundSvg: null,
     
     // --- INICIALIZAÇÃO E SINCRONIZAÇÃO ---
     init: function() {
@@ -43,39 +133,20 @@ window.arena = {
         this.gridRendered = false;
         this.data = null;
         this.selectedTokenId = null;
+        this._wallKeys = {};          // mapa novo = cache de muros zerado
+        this.resetLocalActions();
         
         this.renderLayout();
 
-        const svg = document.getElementById('arena-svg');
-        if (svg && !this.eventsAttached) {
-            svg.addEventListener('mousedown', e => {
-                if(e.target.closest('#arena-ctx-menu')) return;
-                if (e.target.tagName !== 'image' && !e.target.closest('.token')) {
-                    window.arena.drag.active = true;
-                    window.arena.drag.startX = e.clientX - window.arena.drag.panX;
-                    window.arena.drag.startY = e.clientY - window.arena.drag.panY;
-                    svg.style.cursor = 'grabbing';
-                }
-            });
-            window.addEventListener('mousemove', e => {
-                if (window.arena.drag.active) {
-                    e.preventDefault();
-                    window.arena.drag.panX = e.clientX - window.arena.drag.startX;
-                    window.arena.drag.panY = e.clientY - window.arena.drag.startY;
-                    window.arena.updateTransform();
-                }
-                if (window.arena.targeting) {
-                    const pt = window.arena.getSVGPoint(e);
-                    const hex = window.arena.pixelToHex(pt.x, pt.y);
-                    window.arena.renderAoEPreview(hex.q, hex.r);
-                }
-            });
-            window.addEventListener('mouseup', () => {
-                window.arena.drag.active = false;
-                if(svg) svg.style.cursor = 'grab';
-            });
-            this.eventsAttached = true;
-        }
+        // BUG CORRIGIDO (leak): renderLayout() reescreve container.innerHTML e
+        // cria um NOVO <svg> a cada init(). Como eventsAttached nunca era
+        // resetado, a partir da segunda sessao o <svg> ficava SEM nenhum
+        // handler — o arraste do mapa morria silenciosamente. Os listeners de
+        // window ficavam presos para sempre.
+        //
+        // Agora os listeners vivem no <svg> atual e sao religados sempre que
+        // o elemento muda de identidade.
+        this.attachCanvasEvents();
 
         this.unsub = onSnapshot(doc(db, "rpg_sessions", this.sessionDocId), (snap) => {
             if (!snap.exists()) return window.arena.showError("Sessão não encontrada.");
@@ -113,16 +184,86 @@ window.arena = {
         });
     },
 
-    renderCombatLog: function(logs = []) {
+    /**
+     * Liga os handlers do canvas ao <svg> ATUAL.
+     * Chamado a cada init(): se o elemento ja estava ligado, nao faz nada;
+     * se for um <svg> novo (troca de sessao), religa.
+     */
+attachCanvasEvents: function() {
+    const svg = document.getElementById('arena-svg');
+    if (!svg) return;
+
+    // Ja ligado a ESTE elemento? Nao faz nada.
+    if (svg.dataset.arenaBound === '1') return;
+    svg.dataset.arenaBound = '1';
+
+    // Remove listeners de <svg> anteriores (evita duplicar ao trocar de sessão).
+    if (this._boundSvg && this._boundSvg !== svg) {
+        this._boundSvg.removeEventListener('mousedown', this._onCanvasDown);
+        this._boundSvg.removeEventListener('mousemove', this._onCanvasMove);
+    }
+    this._boundSvg = svg;
+
+    // ---- MOUSE DOWN no canvas: iniciar arraste ----
+    this._onCanvasDown = e => {
+        if (e.target.closest('#arena-ctx-menu')) return;
+        if (e.target.tagName === 'image' || e.target.closest('.token')) return;
+
+        window.arena.drag.active = true;
+        window.arena.drag.startX = e.clientX - window.arena.drag.panX;
+        window.arena.drag.startY = e.clientY - window.arena.drag.panY;
+        svg.style.cursor = 'grabbing';
+    };
+    svg.addEventListener('mousedown', this._onCanvasDown);
+
+    // ---- MOUSE MOVE: arraste + preview de AoE ----
+    // Usa requestAnimationFrame para no bloquear o main thread a 60 Hz.
+    let frameQueued = false;
+    this._onCanvasMove = e => {
+        if (window.arena.drag.active) {
+            e.preventDefault();
+            window.arena.drag.panX = e.clientX - window.arena.drag.startX;
+            window.arena.drag.panY = e.clientY - window.arena.drag.startY;
+            window.arena.updateTransform();
+        }
+
+        if (!window.arena.targeting || frameQueued) return;
+        frameQueued = true;
+        requestAnimationFrame(() => {
+            frameQueued = false;
+            if (!window.arena.targeting) return;
+            const pt = window.arena.getSVGPoint(e);
+            const hex = pixelToHex(pt.x, pt.y);
+            window.arena.renderAoEPreview(hex.q, hex.r);
+        });
+    };
+    svg.addEventListener('mousemove', this._onCanvasMove);
+
+    // ---- MOUSE UP: soltar arraste (em window, para pegar release fora) ----
+    this._onCanvasUp = () => {
+        window.arena.drag.active = false;
+        svg.style.cursor = 'grab';
+    };
+    window.addEventListener('mouseup', this._onCanvasUp);
+},
+
+renderCombatLog: function(logs = []) {
         const logContainer = document.getElementById('arena-combat-log');
         if (!logContainer) return;
         logContainer.classList.remove('hidden'); 
         
         if (logs.length > 0) {
-            const recentLogs = logs.slice(-20).reverse(); 
-            logContainer.innerHTML = recentLogs.map(l => 
+            const recentLogs = logs.slice(-20).reverse();
+            // XSS: `l.text` vem de acoes de outros jogadores no documento
+            // compartilhado da sessao. Formatamos a hora como texto puro e
+            // mantemos `l.text` como HTML (ele ja nasce com markup do
+            // buildAttackLog, que por sua vez escapa os nomes dos jogadores).
+            const stamp = l => new Date(l.timestamp || Date.now())
+                .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+            logContainer.innerHTML = recentLogs.map(l =>
                 `<div class="border-b border-slate-800 pb-1 mb-1 last:border-0 last:mb-0 leading-tight">
-                    <span class="text-slate-500 font-bold">[${new Date(l.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}]</span> 
+                    <span class="text-slate-500 font-bold">[${stamp(l)}]</span>
                     <span class="text-slate-300">${l.text}</span>
                 </div>`
             ).join('');
@@ -234,53 +375,95 @@ window.arena = {
     },
 
     // --- ATUALIZAÇÃO DE STATUS EM CASCATA ---
-    modStat: async function(tokenId, field, multiplier, inputId) {
+modStat: async function(tokenId, field, multiplier, inputId) {
         const input = document.getElementById(inputId);
         if (!input) return;
-        
+
         const val = parseInt(input.value);
         if (isNaN(val) || val <= 0) return;
 
         const change = val * multiplier;
-        const t = window.arena.data.tokens[tokenId];
+        const t = window.arena.data?.tokens?.[tokenId];
         if (!t) return;
 
         const sessionRef = doc(db, "rpg_sessions", window.arena.sessionDocId);
-        let newTotal = 0;
+        let newTotal = null;
         let cascadeUpdates = null;
         let charIdToUpdate = null;
 
         if (t.type === 'player' && t.originId) {
             const charId = t.originId;
-            const fichaData = globalState.cache.all_personagens.get(charId) || globalState.cache.personagens.get(charId); 
-            
-            if (fichaData) {
-                const cascade = calculateStatCascade(fichaData.ficha || fichaData, field, change);
-                newTotal = cascade.total; // Pegamos o Total exato da cascata para a Arena
-                cascadeUpdates = cascade.updates;
-                charIdToUpdate = charId;
+            const fichaData = globalState.cache.all_personagens.get(charId)
+                           || globalState.cache.personagens.get(charId);
+
+            // BUG CRATICO CORRIGIDO: antes, se a ficha NAO estivesse no cache
+            // local, `newTotal` permanecia 0 e o updateDoc GRAVAVA hp = 0.
+            // Bastava o cache nao estar hidratado para matar o personagem.
+            // Agora abortamos a operacao em vez de zerar o HP.
+            if (!fichaData) {
+                console.warn(`modStat: ficha ${charId} ausente no cache local; operacao cancelada para nao zerar o status.`);
+                alert('Não foi possível alterar: a ficha deste personagem não está carregada nesta sessão.\nRecarregue a página e tente de novo.');
+                return;
             }
-        } 
-        else {
-            const currentVal = parseInt(t[field] || 0);
-            newTotal = Math.max(0, currentVal + change);
+
+            const sheet = fichaData.ficha || fichaData;
+            const cascade = calculateStatCascade(sheet, field, change);
+            newTotal = cascade.total;
+            cascadeUpdates = cascade.updates;
+            charIdToUpdate = charId;
+        } else {
+            const currentVal = Number(t[field]);
+            const base = Number.isFinite(currentVal) ? currentVal : 0;
+            newTotal = Math.max(0, base + change);
         }
 
+        if (newTotal === null) return;
+
         try {
-            // Atualiza a arena com o Total real e a Ficha com os fracionados (Escudo/Extra/Base)
             await updateDoc(sessionRef, { [`arena_state.tokens.${tokenId}.${field}`]: newTotal });
-            
+
             if (cascadeUpdates && charIdToUpdate) {
                 try {
                     await updateDoc(doc(db, "rpg_fichas", charIdToUpdate), cascadeUpdates);
-                } catch(e) {
-                    console.warn(`Aviso: Falha ao salvar dano/cura na ficha raiz do jogador ${charIdToUpdate}.`, e);
+                } catch (e) {
+                    console.warn(`Aviso: falha ao sincronizar status na ficha ${charIdToUpdate}.`, e);
                 }
             }
-            window.arena.showFloatingText(change > 0 ? `+${val}` : `-${val}`, tokenId, change > 0 ? '#4ade80' : '#ef4444');
+            window.arena.showFloatingText(
+                change > 0 ? `+${val}` : `-${val}`,
+                tokenId,
+                change > 0 ? '#4ade80' : '#ef4444'
+            );
         } catch (err) {
             console.error("Erro sync:", err);
         }
+    },
+
+    // --- TRAVA DE TURNO ---
+    // BUG CORRIGIDO: turnActions vivia so na memoria do cliente (nao persistia),
+    // e os handlers nao checavam a trava ANTES de agir - apenas marcavam depois.
+    // Resultado: magias infinitas por turno e recarregar a pagina devolvia o turno.
+
+    /** Verdadeiro se o ator pode gastar a "acao principal" agora. */
+    canAct: function() {
+        if (window.arena.isMaster) return true;
+        if (!window.arena.data) return false;
+
+        // Modo Livre ignora a trava de turno, mas nao a existencia do turno.
+        if (window.arena.data.freeMovement) return true;
+
+        const turnId = window.arena.data.ordemIniciativa?.[window.arena.data.turnoIndex];
+        if (!turnId) return false;
+        if (window.arena.selectedTokenId && window.arena.selectedTokenId !== turnId) return false;
+        if (!window.arena.turnActions.action) return true;
+
+        return alert('Você já usou sua ação principal neste turno.');
+    },
+
+    /** Marca a acao principal como consumida. */
+    consumeAction: function() {
+        window.arena.turnActions.action = true;
+        window.arena.updateActionHUD();
     },
     
     // --- MAGIAS E COMBATE (TARGETING) ---
@@ -303,10 +486,13 @@ window.arena = {
                     actorName = cached.nome;
                     currentMp = Number(token.mp) || 0;
                     
-                    const allIds = Object.keys(skillsSource);
-                    if (allIds.length > 0 && !allIds.some(k => skillsSource[k].isFavorite)) {
-                        allIds.forEach(k => skillsSource[k].isFavorite = true);
-                    }
+                    // BUG CORRIGIDO: isto escrevia `isFavorite: true` DIRETO no objeto do cache
+                    // compartilhado (globalState.cache.mobs / all_personagens).
+                    // Como outros modulos gravam esse mesmo mapa com updateDoc,
+                    // o "favoritar" silenciosamente persistia no banco.
+                    // Agora a decisao de exibicao e local, sem mutar o cache.
+                    // (A favorabilidade real e um dado do usuario e deve ser
+                    //  gerenciada no modulo de habilidades, nao aqui.)
                 }
             }
         } else {
@@ -320,28 +506,35 @@ window.arena = {
             else currentMp = Number(charData?.ficha?.mpPersonagemBase) || 0;
         }
 
-        const favs = Object.keys(skillsSource).filter(id => skillsSource[id].isFavorite === true);
+        // Lista as habilidades marcadas como favoritas; se o ator nao tiver
+        // nenhuma marcada, mostra TODAS as que ele possui (antes a arena
+        // simplesmente ficava vazia).
+        const skillIds = Object.keys(skillsSource);
+        const favs = skillIds.filter(id => skillsSource[id].isFavorite === true);
+        const list = favs.length > 0 ? favs : skillIds;
 
-        if (favs.length === 0) {
-            container.innerHTML = `<span class="text-[10px] text-slate-500 italic p-2">Nenhuma habilidade favorita encontrada.</span>`;
+        if (list.length === 0) {
+            container.innerHTML = `<span class="text-[10px] text-slate-500 italic p-2">Nenhuma habilidade disponivel.</span>`;
             return;
         }
 
-        if(instruction) {
-            instruction.innerHTML = `<i class="fas fa-hand-pointer mr-1"></i> Passo 1: Escolha a Habilidade de <strong>${actorName}</strong>`;
+        if (instruction) {
+            instruction.innerHTML = `<i class="fas fa-hand-pointer mr-1"></i> Passo 1: Escolha a Habilidade de <strong>${escapeHTML(actorName)}</strong>`;
             instruction.className = "text-[10px] text-amber-400 uppercase font-bold animate-pulse";
         }
 
-        favs.forEach(id => {
+        list.forEach(id => {
             const master = globalState.cache.habilidades.get(id);
             if (!master) return;
             
             const userSkill = skillsSource[id];
-            let dano = Number(master.efeitoDanoBaseUsoHabilidade) || 0;
-            if (master.niveis && master.niveis[userSkill.nivel]) {
-                dano = Number(master.niveis[userSkill.nivel].danoBaseHabilidade) || dano;
-            }
-            
+            const skillLevel = Number(userSkill.nivel) || 1;
+
+            // USA O HELPER COMUM: antes isto fazia "replace" do valor base,
+            // enquanto calcCombate.js fazia "soma" — dois numeros diferentes
+            // para a mesma habilidade.
+            const dano = resolveSkillBaseDamage(master, skillLevel);
+
             const custoMp = Number(master.gastoMpUso) || 0;
             const canCast = window.arena.isMaster || currentMp >= custoMp;
 
@@ -351,7 +544,7 @@ window.arena = {
             btn.title = `${master.nome}\nCusto: ${custoMp} MP\nDano Base: ${dano}`;
             
             if (canCast) {
-                btn.onclick = () => window.arena.enterTargetMode(id, master.nome, custoMp, dano, btn);
+                btn.onclick = () => window.arena.enterTargetMode(id, master.nome, custoMp, dano, btn, skillLevel);
             } else {
                 btn.onclick = () => alert(`Falta Mana!\n\nVocê tem: ${currentMp} MP\nA magia exige: ${custoMp} MP`);
             }
@@ -359,21 +552,35 @@ window.arena = {
         });
     },
 
-    enterTargetMode: function(skillId, name, mp, dmg, btnElement) {
+    enterTargetMode: function(skillId, name, mp, dmg, btnElement, skillLevel = 1) {
         document.querySelectorAll('.arena-skill-btn').forEach(b => b.classList.remove('selected'));
-        if(btnElement) btnElement.classList.add('selected');
+        if (btnElement) btnElement.classList.add('selected');
 
         const masterSkill = globalState.cache.habilidades.get(skillId);
-        const aoeRadius = parseInt(masterSkill.movimentacaoHabilidade) || 0;
-        let duration = parseInt(masterSkill.duracaoHabilidade);
-        if(isNaN(duration) || duration <= 0) duration = 1;
 
-        const myTokenEntry = Object.entries(window.arena.data.tokens).find(([,t]) => t.originId === globalState.selectedCharacterId);
-        const myColor = myTokenEntry ? (myTokenEntry[1].color || "#f59e0b") : "#f59e0b";
+        // `movimentacaoHabilidade` e o RAIO da AoE em hexes (nomehistorico
+        // enganoso, mas e o campo em uso no cadastro).
+        const aoeRadius = Math.max(0, parseInt(masterSkill?.movimentacaoHabilidade) || 0);
 
-        window.arena.targeting = { skillId, skillName: name, mpCost: mp, damage: dmg, radius: aoeRadius, duration: duration, color: myColor };
-        
-        if (myTokenEntry) window.arena.selectedTokenId = myTokenEntry[0];
+        const duration = Math.max(1, parseInt(masterSkill?.duracaoHabilidade) || 1);
+        const maxRange = Math.max(0, parseInt(masterSkill?.alcanceHabilidade) || 0);
+
+        // O conjurador e o token SELECIONADO (Mestre) ou o token do jogador.
+        const actor = resolveActor(
+            window.arena.isMaster ? window.arena.selectedTokenId : null,
+            window.arena.data
+        );
+        const myColor = actor.token?.color || '#f59e0b';
+
+        window.arena.targeting = {
+            skillId, skillName: name, mpCost: mp, damage: dmg,
+            radius: aoeRadius, duration, color: myColor,
+            maxRange, skillLevel
+        };
+
+        if (actor.tokenId && !window.arena.isMaster) window.arena.selectedTokenId = actor.tokenId;
+
+        // Mostra o alcance como area valida (se a habilidade tiver alcance)
         window.arena.renderTokens(); 
         
         const instruction = document.getElementById('arena-skill-instruction');
@@ -452,7 +659,7 @@ window.arena = {
         const t = window.arena.data.tokens[tokenId];
         if(!t) return;
         
-        const pos = window.arena.hexToPixel(t.q, t.r);
+        const pos = hexToPixel(t.q, t.r);
         const div = document.createElement('div');
         
         div.className = `absolute pointer-events-none font-bold text-lg animate-float-up z-[500]`;
@@ -468,156 +675,195 @@ window.arena = {
         setTimeout(() => div.remove(), 2000);
     },
 
-    confirmAttack: async function(targetTokenId, targetName) {
-        window.arena.closeAttackModal(); 
-        
+confirmAttack: async function(targetTokenId, targetName) {
+        window.arena.closeAttackModal();
+
         const skill = window.arena.targeting;
-        const charId = globalState.selectedCharacterId;
-        
-        const myTokenEntry = Object.entries(window.arena.data.tokens).find(([,t]) => t.originId === charId);
-        const myToken = myTokenEntry ? myTokenEntry[1] : { name: "Mestre/Oculto" };
-        const myTokenId = myTokenEntry ? myTokenEntry[0] : null;
+        if (!skill) return;
 
-        const charData = globalState.cache.all_personagens.get(charId);
-        const ficha = charData ? (charData.ficha || charData) : {};
+        // Trava de turno: antes o flag era setado DEPOIS da acao e nunca era
+        // verificado antes dela, o que permitia magias infinitas por turno.
+        if (!window.arena.canAct()) return;
 
-        const costToDeduct = Number(skill.mpCost) || 0;
-
+        const sessionRef = doc(db, "rpg_sessions", window.arena.sessionDocId);
         const masterSkill = globalState.cache.habilidades.get(skill.skillId);
-        let statName = "ATK";
-        let rawStatVal = Number(ficha.atkPersonagemBase) || 0;
 
-        if (masterSkill && masterSkill.atributoInfluenciaHabilidade) {
-            const inf = Array.isArray(masterSkill.atributoInfluenciaHabilidade) ? masterSkill.atributoInfluenciaHabilidade[0] : masterSkill.atributoInfluenciaHabilidade;
-            if (inf && inf.includes('Defesa')) {
-                statName = "DEF";
-                rawStatVal = Number(ficha.defPersonagemBase) || 0;
-            } else if (inf && inf.includes('Evasao')) {
-                statName = "EVA";
-                rawStatVal = Number(ficha.evaPersonagemBase) || 0;
+        // resolveActor usa o token SELECIONADO (Mestre controlando monstro)
+        // em vez de selectedCharacterId: antes o monstro usava o ATK do Mestre
+        // e consumia o MP da ficha do Mestre.
+        const actor = resolveActor(
+            window.arena.isMaster ? window.arena.selectedTokenId : null,
+            window.arena.data
+        );
+
+        const targetToken = window.arena.data.tokens[targetTokenId];
+        if (!targetToken) return;
+
+        // Alcance: antes nao existia nenhuma verificacao (dava para atacar
+        // corpo a corpo do outro lado do mapa).
+        const maxRange = Number(masterSkill?.alcanceHabilidade);
+        if (Number.isFinite(maxRange) && maxRange > 0) {
+            const dist = tokenDistance(actor.token, targetToken);
+            if (!Number.isFinite(dist) || dist > maxRange) {
+                window.arena.cancelTargeting();
+                return alert(`Fora de alcance! (distancia ${Number.isFinite(dist) ? dist : '?'} / ${maxRange})`);
             }
         }
 
-        const debuffFome = getFomeDebuffMultiplier(ficha);
-        const statTotal = Math.floor(rawStatVal * debuffFome);
-        const isDebuffed = debuffFome < 1;
+        const attackerFicha = actor.ficha || {};
+        const defenderFicha = lookupDefenderSheet(targetToken);
 
-        const d20 = Math.floor(Math.random() * 20) + 1;
-        const totalDano = d20 + Number(skill.damage) + statTotal;
+        const result = rollAttack({
+            masterSkill,
+            skillLevel: skill.skillLevel || 1,
+            baseDamage: skill.damage,
+            attacker: attackerFicha,
+            defender: defenderFicha,
+            fomeMult: getFomeDebuffMultiplier
+        });
 
-        let statIcon = "⚔️";
-        if(statName === "DEF") statIcon = "🛡️";
-        if(statName === "EVA") statIcon = "🏃";
-        const hungerWarn = isDebuffed ? ` <span class="text-[10px] text-red-500" title="Debuff de Fome Ativo!"><i class="fas fa-drumstick-bite"></i></span>` : '';
+        const logMsg = buildAttackLog({
+            actorName: actor.token?.name || 'Desconhecido',
+            skillName: skill.skillName,
+            targetName: targetToken.name || 'alvo',
+            result
+        });
 
-        const logMsg = `⚔️ <strong class="text-emerald-400">${myToken.name}</strong> lançou <span class="text-amber-400">${skill.skillName}</span> em <strong class="text-red-400">${targetName}</strong>.<br>Rolagem: [D20: ${d20}] + 💥${skill.damage} + ${statIcon}${statTotal}${hungerWarn} = <span class="text-xl font-bold text-white border-b border-red-500">${totalDano}</span>`;
+        const cost = Math.abs(Number(skill.mpCost) || 0);
 
         try {
-            const sessionRef = doc(db, "rpg_sessions", window.arena.sessionDocId);
-            let cascadeUpdates = null;
-            let cascadeTotalMp = null;
-            
-            // Aplica a cascata no MP do Conjurador
-            if (myTokenId && charId && charData) {
-                const cascade = calculateStatCascade(charData.ficha || charData, 'mp', -Math.abs(costToDeduct));
-                cascadeUpdates = cascade.updates;
-                cascadeTotalMp = cascade.total; // Captura o total de MP que sobrou
-            }
+            await runTransaction(db, async (tx) => {
+                const snap = await tx.get(sessionRef);
+                if (!snap.exists()) throw 'Sessao nao encontrada.';
+                const state = snap.data().arena_state || { tokens: {} };
+                const batch = {};
 
-            const newLogEntry = { text: logMsg, timestamp: Date.now(), type: 'attack' };
-            const sessionUpdates = { combat_log: arrayUnion(newLogEntry) };
+                // ---- DANO NO ALVO: o que antes NUNCA acontecia ----
+                // O totalDano ia apenas para o log e para o texto flutuante.
+                const liveTarget = (state.tokens || {})[targetTokenId];
+                if (liveTarget && !result.missed) {
+                    const currentHp = Math.max(0, Number(liveTarget.hp) || 0);
+                    const remaining = Math.max(0, currentHp - result.damage);
+                    if (currentHp - remaining > 0) {
+                        batch[`arena_state.tokens.${targetTokenId}.hp`] = remaining;
+                    }
+                }
 
-            // Salva o Total Exato de MP de volta no Token
-            if (myTokenId && cascadeTotalMp !== null) {
-                sessionUpdates[`arena_state.tokens.${myTokenId}.mp`] = cascadeTotalMp;
-            }
+                // ---- Custo de MP do conjurador ----
+                if (actor.tokenId && cost > 0) {
+                    if (actor.isPlayer && actor.fichaId) {
+                        const cascade = calculateStatCascade(attackerFicha, 'mp', -cost);
+                        batch[`arena_state.tokens.${actor.tokenId}.mp`] = cascade.total;
+                    } else {
+                        const liveActor = (state.tokens || {})[actor.tokenId];
+                        batch[`arena_state.tokens.${actor.tokenId}.mp`] =
+                            Math.max(0, (Number(liveActor?.mp) || 0) - cost);
+                    }
+                }
 
-            await updateDoc(sessionRef, sessionUpdates);
+                batch.combat_log = arrayUnion({ text: logMsg, timestamp: Date.now(), type: 'attack' });
+                tx.update(sessionRef, batch);
+            });
 
-            if (cascadeUpdates && charId) {
+            // Sincroniza o pool de MP na ficha raiz do jogador
+            if (actor.tokenId && actor.isPlayer && actor.fichaId && cost > 0) {
+                const cascade = calculateStatCascade(attackerFicha, 'mp', -cost);
                 try {
-                    await updateDoc(doc(db, "rpg_fichas", charId), cascadeUpdates);
-                } catch(e) {
-                    console.warn(`Aviso de Sync Ficha:`, e);
+                    await updateDoc(doc(db, 'rpg_fichas', actor.fichaId), cascade.updates);
+                } catch (e) {
+                    console.warn('Aviso de Sync Ficha (MP):', e);
                 }
             }
 
-            window.arena.showFloatingText(`-${costToDeduct} MP`, myTokenId, '#60a5fa');
-            window.arena.showFloatingText(`HIT! ${totalDano}`, targetTokenId, '#ef4444');
+            if (actor.tokenId && cost > 0) {
+                window.arena.showFloatingText(`-${cost} MP`, actor.tokenId, '#60a5fa');
+            }
+            window.arena.showFloatingText(
+                result.missed ? 'ERROU!' : `-${result.damage}`,
+                targetTokenId,
+                result.missed ? '#94a3b8' : '#ef4444'
+            );
 
-            window.arena.turnActions.action = true;
-            window.arena.updateActionHUD();
+            window.arena.consumeAction();
             window.arena.cancelTargeting();
 
-        } catch(e) {
+        } catch (e) {
             console.error(e);
             alert("Erro ao processar ataque.");
         }
     },
 
-    executeAreaSkill: async function(targetQ, targetR) {
+executeAreaSkill: async function(targetQ, targetR) {
         if (!window.arena.targeting) return;
+        if (!window.arena.canAct()) return;
+
         const skill = window.arena.targeting;
-        const charId = globalState.selectedCharacterId;
-        
-        const myTokenEntry = Object.entries(window.arena.data.tokens).find(([,t]) => t.originId === charId);
-        if(!myTokenEntry && !window.arena.isMaster) return alert("Seu token não está na arena!");
-        
-        const myTokenId = myTokenEntry ? myTokenEntry[0] : null;
-        const myToken = myTokenEntry ? myTokenEntry[1] : { name: "O Mestre", color: "#f59e0b" };
-
-        const charData = globalState.cache.all_personagens.get(charId);
-        const ficha = charData ? (charData.ficha || charData) : {};
-
-        const costToDeduct = Number(skill.mpCost) || 0;
-        let totalCurrentMp = Number(myToken.mp) || 0;
-
-        if (charData && myToken.type === 'player') {
-            const attrs = ficha.atributosBasePersonagem || {};
-            const mpShield = ficha.mpShieldAtual !== undefined ? Number(ficha.mpShieldAtual) : Number(attrs.defesaMagicaNativaTotal||0);
-            const mpExtra = ficha.mpExtraAtual !== undefined ? Number(ficha.mpExtraAtual) : Number(attrs.pontosMPExtraTotal||0);
-            const mpBase = ficha.mpPersonagemBase !== undefined ? Number(ficha.mpPersonagemBase) : Number(ficha.mpMaxPersonagemBase || 1);
-            totalCurrentMp = mpBase + mpExtra + mpShield;
-        }
-
-        if (myTokenId && !window.arena.isMaster) {
-            if (totalCurrentMp < costToDeduct) {
-                alert(`MP Insuficiente!\n\nVocê tem: ${totalCurrentMp} MP\nA magia exige: ${costToDeduct} MP`);
-                window.arena.cancelTargeting();
-                return;
-            }
-        }
-
+        const sessionRef = doc(db, "rpg_sessions", window.arena.sessionDocId);
         const masterSkill = globalState.cache.habilidades.get(skill.skillId);
-        let statName = "ATK";
-        let rawStatVal = Number(ficha.atkPersonagemBase) || 0;
 
-        if (masterSkill && masterSkill.atributoInfluenciaHabilidade) {
-            const inf = Array.isArray(masterSkill.atributoInfluenciaHabilidade) ? masterSkill.atributoInfluenciaHabilidade[0] : masterSkill.atributoInfluenciaHabilidade;
-            if (inf && inf.includes('Defesa')) { statName = "DEF"; rawStatVal = Number(ficha.defPersonagemBase) || 0; } 
-            else if (inf && inf.includes('Evasao')) { statName = "EVA"; rawStatVal = Number(ficha.evaPersonagemBase) || 0; }
+        const actor = resolveActor(
+            window.arena.isMaster ? window.arena.selectedTokenId : null,
+            window.arena.data
+        );
+
+        if (!actor.tokenId && !window.arena.isMaster) {
+            return alert("Seu token não está na arena!");
         }
 
-        const debuffFome = getFomeDebuffMultiplier(ficha);
-        const statTotal = Math.floor(rawStatVal * debuffFome);
-        const isDebuffed = debuffFome < 1;
+        const attackerFicha = actor.ficha || {};
+        const myTokenName = actor.token?.name || 'O Mestre';
+        const cost = Math.abs(Number(skill.mpCost) || 0);
 
-        const d20 = Math.floor(Math.random() * 20) + 1;
-        const totalDano = d20 + Number(skill.damage) + statTotal;
+        // --- Validação de MP ---
+        if (!window.arena.isMaster) {
+            const mpPool = actor.isPlayer && actor.fichaId
+                ? resolvePool(attackerFicha, 'mp').current
+                : Math.max(0, Number(actor.token?.mp) || 0);
 
-        let statIcon = statName === "DEF" ? "🛡️" : (statName === "EVA" ? "🏃" : "⚔️");
-        const hungerWarn = isDebuffed ? ` <span class="text-[10px] text-red-500" title="Debuff de Fome Ativo!"><i class="fas fa-drumstick-bite"></i></span>` : '';
-
-        const hitTokensIds = [];
-        const hitTokensNames = [];
-        Object.entries(window.arena.data.tokens).forEach(([tid, tok]) => {
-            if (window.arena.hexDistance(targetQ, targetR, tok.q, tok.r) <= skill.radius) {
-                hitTokensIds.push(tid);
-                hitTokensNames.push(tok.name);
+            if (mpPool < cost) {
+                window.arena.cancelTargeting();
+                return alert(`MP Insuficiente!\n\nVocê tem: ${mpPool} MP\nA magia exige: ${cost} MP`);
             }
-        });
-        
-        const hitString = hitTokensNames.length > 0 ? `💥 Atingiu: ${hitTokensNames.join(', ')}` : `Atingiu apenas o chão.`;
+        }
+
+        // --- Alcance da habilidade (antes nunca checado) ---
+        const maxRange = Number(masterSkill?.alcanceHabilidade);
+        if (Number.isFinite(maxRange) && maxRange > 0 && actor.token) {
+            const dist = tokenDistance(actor.token, { q: targetQ, r: targetR });
+            if (!Number.isFinite(dist) || dist > maxRange) {
+                window.arena.cancelTargeting();
+                return alert(`Fora de alcance! (distancia ${Number.isFinite(dist) ? dist : '?'} / ${maxRange})`);
+            }
+        }
+
+        // --- Quem é atingido? ---
+        // BUG CORRIGIDO: o filtro pegava o próprio conjurador e os aliados.
+        // Agora o caster é sempre excluído (self-damage só se explícito).
+        const tokensInArea = Object.entries(window.arena.data.tokens || {})
+            .filter(([tid, tok]) => tid !== actor.tokenId)
+            .filter(([, tok]) => {
+                if (![tok.q, tok.r].every(Number.isFinite)) return false;
+                return hexDistance(targetQ, targetR, tok.q, tok.r) <= skill.radius;
+            });
+
+        const hits = [];
+        for (const [tid, tok] of tokensInArea) {
+            const defenderFicha = lookupDefenderSheet(tok);
+            const roll = rollAttack({
+                masterSkill,
+                skillLevel: skill.skillLevel || 1,
+                baseDamage: skill.damage,
+                attacker: attackerFicha,
+                defender: defenderFicha,
+                fomeMult: getFomeDebuffMultiplier
+            });
+            hits.push({ tokenId: tid, token: tok, roll });
+        }
+
+        const hitNames = hits.map(h => h.token.name);
+        const hitString = hitNames.length > 0
+            ? `Atingiu: ${hitNames.join(', ')}`
+            : 'Atingiu apenas o chão.';
 
         const auraId = `aura_${Date.now()}`;
         const newAura = {
@@ -625,53 +871,83 @@ window.arena = {
             q: targetQ,
             r: targetR,
             radius: skill.radius,
-            color: skill.color || "#f59e0b",
+            color: skill.color || '#f59e0b',
             duration: skill.duration,
-            casterName: myToken.name,
-            casterTokenId: myTokenId 
+            casterName: myTokenName,
+            casterTokenId: actor.tokenId
         };
 
-        const logMsg = `🌀 <strong style="color:${newAura.color}">${myToken.name}</strong> conjurou <span class="text-amber-400">${skill.skillName}</span>!<br>Rolagem: [D20: ${d20}] + Base:${skill.damage} + ${statIcon}${statTotal}${hungerWarn} = <span class="text-xl font-bold text-white border-b border-red-500">${totalDano}</span><br><span class="text-xs text-sky-300 block mt-1">${hitString}</span>`;
+        const headRoll = hits.length ? hits[0].roll : rollAttack({
+            masterSkill, skillLevel: skill.skillLevel || 1, baseDamage: skill.damage,
+            attacker: attackerFicha, defender: null, fomeMult: getFomeDebuffMultiplier
+        });
+
+        const logMsg = `🌀 <strong style="color:${escapeHTML(newAura.color)}">${escapeHTML(myTokenName)}</strong> conjurou <span class="text-amber-400">${escapeHTML(skill.skillName)}</span>!<br>` +
+            `Potência base: ${escapeHTML(formatRollSummary(headRoll))}<br>` +
+            `<span class="text-xs text-sky-300 block mt-1">${escapeHTML(hitString)}</span>` +
+            (hits.length ? `<span class="text-xs text-red-300 block">` +
+                hits.map(h => `${escapeHTML(h.token.name)}: ${h.roll.missed ? 'ERROU' : `-${h.roll.damage}`}`).join(' · ') +
+                `</span>` : '');
 
         try {
-            const sessionRef = doc(db, "rpg_sessions", window.arena.sessionDocId);
-            let cascadeUpdates = null;
-            let cascadeTotalMp = null;
-            
-            if (myTokenId && charId && charData) {
-                const cascade = calculateStatCascade(charData.ficha || charData, 'mp', -Math.abs(costToDeduct));
-                cascadeUpdates = cascade.updates;
-                cascadeTotalMp = cascade.total;
-            }
+            await runTransaction(db, async (tx) => {
+                const snap = await tx.get(sessionRef);
+                if (!snap.exists()) throw 'Sessao nao encontrada.';
+                const state = snap.data().arena_state || { tokens: {} };
+                const batch = {};
 
-            const newLogEntry = { text: logMsg, timestamp: Date.now(), type: 'attack' };
-            const sessionUpdates = {
-                combat_log: arrayUnion(newLogEntry),
-                [`arena_state.auras.${auraId}`]: newAura
-            };
+                // ---- Dano em cada alvo da area ----
+                for (const h of hits) {
+                    if (h.roll.missed) continue;
+                    const live = (state.tokens || {})[h.tokenId];
+                    if (!live) continue;
+                    const currentHp = Math.max(0, Number(live.hp) || 0);
+                    const remaining = Math.max(0, currentHp - h.roll.damage);
+                    if (currentHp - remaining > 0) {
+                        batch[`arena_state.tokens.${h.tokenId}.hp`] = remaining;
+                    }
+                }
 
-            if (myTokenId && cascadeTotalMp !== null) {
-                sessionUpdates[`arena_state.tokens.${myTokenId}.mp`] = cascadeTotalMp;
-            }
+                if (actor.tokenId && cost > 0) {
+                    if (actor.isPlayer && actor.fichaId) {
+                        const cascade = calculateStatCascade(attackerFicha, 'mp', -cost);
+                        batch[`arena_state.tokens.${actor.tokenId}.mp`] = cascade.total;
+                    } else {
+                        const liveActor = (state.tokens || {})[actor.tokenId];
+                        batch[`arena_state.tokens.${actor.tokenId}.mp`] =
+                            Math.max(0, (Number(liveActor?.mp) || 0) - cost);
+                    }
+                }
 
-            await updateDoc(sessionRef, sessionUpdates);
+                batch.combat_log = arrayUnion({ text: logMsg, timestamp: Date.now(), type: 'attack' });
+                batch[`arena_state.auras.${auraId}`] = newAura;
+                tx.update(sessionRef, batch);
+            });
 
-            if (cascadeUpdates && charId) {
+            if (actor.tokenId && actor.isPlayer && actor.fichaId && cost > 0) {
+                const cascade = calculateStatCascade(attackerFicha, 'mp', -cost);
                 try {
-                    await updateDoc(doc(db, "rpg_fichas", charId), cascadeUpdates);
-                } catch(e) {
-                    console.warn(`Aviso de Sync Ficha:`, e);
+                    await updateDoc(doc(db, 'rpg_fichas', actor.fichaId), cascade.updates);
+                } catch (e) {
+                    console.warn('Aviso de Sync Ficha (MP):', e);
                 }
             }
 
-            window.arena.showFloatingText(`-${costToDeduct} MP`, myTokenId, '#60a5fa');
-            hitTokensIds.forEach(id => window.arena.showFloatingText(`HIT! ${totalDano}`, id, '#ef4444'));
+            if (actor.tokenId && cost > 0) {
+                window.arena.showFloatingText(`-${cost} MP`, actor.tokenId, '#60a5fa');
+            }
+            for (const h of hits) {
+                window.arena.showFloatingText(
+                    h.roll.missed ? 'ERROU!' : `-${h.roll.damage}`,
+                    h.tokenId,
+                    h.roll.missed ? '#94a3b8' : '#ef4444'
+                );
+            }
 
-            window.arena.turnActions.action = true;
-            window.arena.updateActionHUD();
+            window.arena.consumeAction();
             window.arena.cancelTargeting();
 
-        } catch(e) {
+        } catch (e) {
             console.error(e);
             alert("Erro ao processar magia em área.");
         }
@@ -686,8 +962,7 @@ window.arena = {
             if (!hexEl || !hexEl.classList.contains('reachable')) {
                 return alert("Fora do seu alcance! Clique num hexágono verde.");
             }
-            window.arena.executeAreaSkill(q, r);
-            return;
+            return window.arena.executeAreaSkill(q, r);
         }
 
         if (window.arena.isMaster && window.arena.tool !== 'select') {
@@ -702,6 +977,15 @@ window.arena = {
 
         if (window.arena.selectedTokenId) {
             const t = window.arena.data.tokens[window.arena.selectedTokenId];
+            if (!t) return;
+
+            // BUG CORRIGIDO: nao existia nenhuma validacao de existencia da
+            // celula para o Mestre — dava para escrever q/r arbitrarios e o
+            // token sumia do canvas (ou virava "NaN" nos atributos SVG).
+            if (!isInsideGrid(q, r)) {
+                return alert("Posição inválida: fora do mapa.");
+            }
+
             if (!window.arena.isMaster) {
                 if (t.originId !== globalState.selectedCharacterId) return alert("Você só controla seu personagem.");
                 if (!window.arena.data.freeMovement) {
@@ -712,6 +996,12 @@ window.arena = {
                 const hexEl = document.querySelector(`.hex[data-q="${q}"][data-r="${r}"]`);
                 if (!hexEl || !hexEl.classList.contains('reachable')) return alert("Movimento inválido.");
             }
+
+            // Nao pode entrar na mesma celula de outro token
+            const occupied = Object.entries(window.arena.data.tokens).find(
+                ([tid, tok]) => tid !== window.arena.selectedTokenId && tok.q === q && tok.r === r
+            );
+            if (occupied) return alert("Esta casa já está ocupada.");
 
             await updateDoc(sessionRef, {
                 [`arena_state.tokens.${window.arena.selectedTokenId}.q`]: q,
@@ -863,100 +1153,142 @@ window.arena = {
             mapLayer.innerHTML = `<image href="${window.arena.data.mapaUrl}" x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="none" style="opacity: 0.6;" />`;
         }
 
+        // PERFORMANCE: as 1600 celulas usavam 3200 closures (onclick +
+        // onmouseenter por celula). Agora os handlers sao delegated no <g>,
+        // entao o custo e o de 1600 nos em vez de 3200 nos + 3200 funcoes.
+        const frag = document.createDocumentFragment();
         for (let r = 0; r < GRID_ROWS; r++) {
             for (let q = 0; q < GRID_COLS; q++) {
-                const qAxial = q - Math.floor(r / 2);
-                const pos = window.arena.hexToPixel(qAxial, r);
-                
+                const qAxial = gridToAxial(q, r);
+                const pos = hexToPixel(qAxial, r);
+
                 const hex = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
-                hex.setAttribute("points", window.arena.getHexPoints(pos.x, pos.y));
+                hex.setAttribute("points", getHexPoints(pos.x, pos.y, HEX_SIZE - 1));
                 hex.setAttribute("class", "hex");
                 hex.dataset.q = qAxial;
                 hex.dataset.r = r;
-                
-                hex.onclick = () => window.arena.handleHexClick(qAxial, r);
-                hex.onmouseenter = () => {
-                    if (window.arena.targeting) window.arena.renderAoEPreview(qAxial, r);
-                };
-                
-                gridLayer.appendChild(hex);
+
+                frag.appendChild(hex);
             }
         }
+        gridLayer.replaceChildren(frag);
+
+        // Delegated handlers: 1 listener no <g> em vez de 3200 nos.
+        // Os dados q/r ficam nos dataset de cada <polygon class="hex">.
+        if (!gridLayer.dataset.arenaBound) {
+            gridLayer.dataset.arenaBound = '1';
+            gridLayer.addEventListener('click', e => {
+                const hexEl = e.target.closest('.hex');
+                if (!hexEl) return;
+                window.arena.handleHexClick(Number(hexEl.dataset.q), Number(hexEl.dataset.r));
+            });
+        }
+
         window.arena.gridRendered = true;
         window.arena.updateObstacles();
         window.arena.renderAuras(); 
     },
 
-    renderAoEPreview: function(q, r) {
+renderAoEPreview: function(q, r) {
         const previewLayer = document.getElementById('arena-layer-preview');
         if (!previewLayer) return;
-        previewLayer.innerHTML = '';
-        
-        const skill = window.arena.targeting;
-        if (!skill) return;
-        
-        const hexEl = document.querySelector(`.hex[data-q="${q}"][data-r="${r}"]`);
-        if (!hexEl || !hexEl.classList.contains('reachable')) return; 
 
-        for (let tr = 0; tr < GRID_ROWS; tr++) {
-            for (let tq = 0; tq < GRID_COLS; tq++) {
-                const tqAxial = tq - Math.floor(tr / 2);
-                
-                if (window.arena.hexDistance(q, r, tqAxial, tr) <= skill.radius) {
-                    const pos = window.arena.hexToPixel(tqAxial, tr);
-                    const ghost = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
-                    ghost.setAttribute("points", window.arena.getHexPoints(pos.x, pos.y));
-                    ghost.setAttribute("fill", skill.color);
-                    ghost.setAttribute("fill-opacity", "0.4");
-                    ghost.setAttribute("stroke", "#ffffff");
-                    ghost.setAttribute("stroke-dasharray", "4");
-                    ghost.setAttribute("stroke-width", "2");
-                    ghost.style.pointerEvents = "none";
-                    previewLayer.appendChild(ghost);
-                }
-            }
+        const skill = window.arena.targeting;
+        if (!skill) {
+            if (previewLayer.childElementCount > 0) previewLayer.replaceChildren();
+            return;
         }
+
+        // Evita redesenhar quando o cursor continua na mesma celula.
+        const cacheKey = `${q},${r},${skill.radius},${skill.color}`;
+        if (previewLayer.dataset.cacheKey === cacheKey) return;
+        previewLayer.dataset.cacheKey = cacheKey;
+
+        const hexEl = document.querySelector(`.hex[data-q="${q}"][data-r="${r}"]`);
+        if (!hexEl || !hexEl.classList.contains('reachable')) {
+            previewLayer.replaceChildren();
+            return;
+        }
+
+        // PERFORMANCE: antes isto varria as 40x40 = 1600 celulas em CADA
+        // mousemove (~60 Hz) e criava ate 1600 <polygon> por evento.
+        // Agora usa a caminhada em espiral de js/core/hex.js: so as celulas
+        // dentro do raio (raio 5 => 91 celulas em vez de 1600).
+        const cells = hexesInRadius(q, r, skill.radius);
+        const frag = document.createDocumentFragment();
+
+        for (const cell of cells) {
+            if (!isInsideGrid(cell.q, cell.r)) continue;
+            const pos = hexToPixel(cell.q, cell.r);
+            const ghost = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+            ghost.setAttribute("points", getHexPoints(pos.x, pos.y, HEX_SIZE - 1));
+            ghost.setAttribute("fill", skill.color);
+            ghost.setAttribute("fill-opacity", "0.4");
+            ghost.setAttribute("stroke", "#ffffff");
+            ghost.setAttribute("stroke-dasharray", "4");
+            ghost.setAttribute("stroke-width", "2");
+            ghost.style.pointerEvents = "none";
+            frag.appendChild(ghost);
+        }
+        previewLayer.replaceChildren(frag);
     },
 
     renderAuras: function() {
         const aurasLayer = document.getElementById('arena-layer-auras');
         if (!aurasLayer) return;
-        aurasLayer.innerHTML = '';
 
         const auras = window.arena.data?.auras || {};
-        
-        Object.values(auras).forEach(aura => {
-            for (let r = 0; r < GRID_ROWS; r++) {
-                for (let q = 0; q < GRID_COLS; q++) {
-                    const qAxial = q - Math.floor(r / 2);
-                    
-                    if (window.arena.hexDistance(aura.q, aura.r, qAxial, r) <= aura.radius) {
-                        const pos = window.arena.hexToPixel(qAxial, r);
-                        const hex = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
-                        hex.setAttribute("points", window.arena.getHexPoints(pos.x, pos.y));
-                        hex.setAttribute("fill", aura.color);
-                        hex.setAttribute("fill-opacity", "0.2"); 
-                        hex.setAttribute("stroke", aura.color);
-                        hex.setAttribute("stroke-opacity", "0.2");
-                        hex.setAttribute("stroke-width", "2");
-                        hex.style.pointerEvents = "none";
-                        aurasLayer.appendChild(hex);
-                    }
-                }
+        const frag = document.createDocumentFragment();
+
+        // PERFORMANCE: mesmo problema do preview - 1600 iteracoes POR AURA,
+        // executadas a cada onSnapshot. Agora apenas as celulas do raio.
+        for (const aura of Object.values(auras)) {
+            if (![aura.q, aura.r].every(Number.isFinite)) continue;
+
+            for (const cell of hexesInRadius(aura.q, aura.r, aura.radius)) {
+                if (!isInsideGrid(cell.q, cell.r)) continue;
+                const pos = hexToPixel(cell.q, cell.r);
+                const hex = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+                hex.setAttribute("points", getHexPoints(pos.x, pos.y, HEX_SIZE - 1));
+                hex.setAttribute("fill", aura.color);
+                hex.setAttribute("fill-opacity", "0.2");
+                hex.setAttribute("stroke", aura.color);
+                hex.setAttribute("stroke-opacity", "0.2");
+                hex.setAttribute("stroke-width", "2");
+                hex.style.pointerEvents = "none";
+                frag.appendChild(hex);
             }
-        });
+        }
+        aurasLayer.replaceChildren(frag);
     },
 
+    // PERFORMANCE: antes percorria os 1600 hexes e reescrevia o atributo
+    // class de cada um, a CADA onSnapshot. Agora so toca nos hexes que
+    // realmente mudaram de estado.
     updateObstacles: function() {
-        const hexes = document.querySelectorAll('#arena-layer-grid .hex');
-        hexes.forEach(hex => {
-            const key = `${hex.dataset.q},${hex.dataset.r}`;
-            const obs = window.arena.data.obstaculos?.[key];
-            let cls = "hex";
-            if (obs) cls += ` wall-${obs}`;
-            if (hex.classList.contains('reachable')) cls += " reachable";
-            hex.setAttribute("class", cls);
-        });
+        const gridLayer = document.getElementById('arena-layer-grid');
+        if (!gridLayer) return;
+
+        const obstacles = window.arena.data?.obstaculos || {};
+
+        // 1) remove as classes de muro que nao existem mais
+        for (const key of Object.keys(window.arena._wallKeys || {})) {
+            if (obstacles[key] === undefined) {
+                delete window.arena._wallKeys[key];
+            }
+        }
+
+        // 2) aplica apenas as diferencas
+        for (const [key, tipo] of Object.entries(obstacles)) {
+            if (window.arena._wallKeys[key] === tipo) continue;
+            window.arena._wallKeys[key] = tipo;
+
+            const [q, r] = key.split(',');
+            const el = gridLayer.querySelector(`.hex[data-q="${q}"][data-r="${r}"]`);
+            if (el) el.classList.add(`wall-${tipo}`);
+        }
+
+        // 3) marcadores de "alcançavel" sao tratados em renderTokens
     },
 
     renderTokens: function() {
@@ -970,23 +1302,29 @@ window.arena = {
         // Calcula a área de movimento se for o turno do personagem
         if (window.arena.selectedTokenId && window.arena.data.tokens[window.arena.selectedTokenId]) {
             const t = window.arena.data.tokens[window.arena.selectedTokenId];
-            if (!window.arena.isMaster || window.arena.targeting) { 
+            if (!window.arena.isMaster || window.arena.targeting) {
                 let realMove = 5;
-                if(t.originCollection === 'rpg_fichas') {
-                    const cached = globalState.cache?.all_personagens?.get(t.originId) || globalState.cache?.players?.get(t.originId);
-                    if(cached) {
-                        const baseMove = parseInt(cached.movimentoPersonagemBase || 5);
-                        let penalty = 0;
-                        if(window.calculateWeightStats) {
-                            penalty = window.calculateWeightStats(cached, cached.levelPersonagemBase || 1).penalty;
-                        }
-                        realMove = Math.max(0, baseMove - penalty);
+                if (t.originCollection === 'rpg_fichas') {
+                    const cached = globalState.cache?.all_personagens?.get(t.originId)
+                                || globalState.cache?.players?.get(t.originId);
+                    if (cached) {
+                        // BUG CORRIGIDO: usava `window.calculateWeightStats`, que
+                        // NUNCA EXISTIU (calculateWeightStats e um export de
+                        // modulo ES e nao vira propriedade de window). A
+                        // penalidade de encumbrance era codigo morto, e a ficha
+                        // e a arena discordavam sobre o movimento do personagem.
+                        realMove = getEffectiveMovement(cached, cached.levelPersonagemBase);
                     }
                 } else {
                     const cached = globalState.cache?.mobs?.get(t.originId);
-                    if(cached) realMove = parseInt(cached.explorixMovimento || 5);
+                    realMove = getEffectiveMovement(cached || t, cached?.levelPersonagemBase);
                 }
-                reachableSet = window.arena.getReachableHexes(t.q, t.r, realMove);
+
+                // Muros e outros tokens bloqueiam o caminho. A versao antiga
+                // apenas checava a existencia da chave no mapa de obstaculos,
+                // entao muros "soft" (transparentes) bloqueavam igual aos solidos.
+                const blocked = buildBlockedSet(window.arena.data, window.arena.selectedTokenId);
+                reachableSet = getReachableHexes(t.q, t.r, realMove, blocked);
             }
         }
 
@@ -1072,7 +1410,7 @@ window.arena = {
             if (dispHp) dispHp.textContent = currentHP;
             if (dispMp) dispMp.textContent = currentMP;
 
-            const pos = window.arena.hexToPixel(t.q, t.r);
+            const pos = hexToPixel(t.q, t.r);
             const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
             group.setAttribute("transform", `translate(${pos.x}, ${pos.y})`);
             
@@ -1092,20 +1430,24 @@ window.arena = {
             let auraGlowColor = "";
 
             Object.values(activeAuras).forEach(aura => {
-                if (window.arena.hexDistance(aura.q, aura.r, t.q, t.r) <= aura.radius) {
+                if (![aura.q, aura.r, t.q, t.r].every(Number.isFinite)) return;
+                if (hexDistance(aura.q, aura.r, t.q, t.r) <= aura.radius) {
                     isAffected = true;
-                    auraGlowColor = aura.color; 
-                    statusTooltip += `☢️ ${aura.skillName} (${aura.duration} rodada(s) restantes)\n`;
+                    auraGlowColor = aura.color;
+                    statusTooltip += `☢️ ${escapeHTML(aura.skillName)} (${aura.duration} rodada(s) restantes)\n`;
                 }
             });
 
             const affectedFilter = isAffected && !window.arena.targeting ? `filter="drop-shadow(0 0 10px ${auraGlowColor})"` : "";
             const safeImgUrl = (imgUrl && imgUrl.startsWith('http')) ? imgUrl : IMG_PLACEHOLDER_BASE64;
+            // XSS: `t.name` vem de nomes de personagem/monstro (digitados por
+            // jogadores) e `statusTooltip` entra num atributo <title>.
+            const safeTokenName = escapeHTML(t.name);
 
             group.innerHTML = `
                 <defs><clipPath id="clip-${id}"><circle r="${HEX_SIZE * 0.85}" cx="0" cy="0"/></clipPath></defs>
-                ${isAffected ? `<title>Sob Efeito Mágico:\n${statusTooltip}</title>` : `<title>${t.name}</title>`}
-                
+                ${isAffected ? `<title>Sob Efeito Mágico:\n${statusTooltip}</title>` : `<title>${safeTokenName}</title>`}
+
                 <circle r="${HEX_SIZE * 0.92}" fill="#050505" stroke="${id === turnId ? '#f59e0b' : (t.type === 'player' ? (t.color || '#34d399') : '#ef4444')}" stroke-width="${id === turnId ? 4 : 2}" ${affectedFilter}/>
                 
                 <image href="${safeImgUrl}" x="-${HEX_SIZE}" y="-${HEX_SIZE}" width="${HEX_SIZE*2}" height="${HEX_SIZE*2}" 
@@ -1117,7 +1459,7 @@ window.arena = {
                 <rect x="-20" y="${HEX_SIZE * 0.5 + 7}" width="40" height="5" fill="#000" rx="1" stroke="#000" stroke-width="0.5"/>
                 <rect x="-20" y="${HEX_SIZE * 0.5 + 7}" width="${mpPct * 40}" height="5" fill="#3b82f6" rx="1"/>
 
-                <text y="-${HEX_SIZE + 5}" text-anchor="middle" class="token-label" fill="white" font-weight="bold" font-size="11" style="text-shadow: 0 2px 4px black; letter-spacing: 0.5px;">${t.name.substring(0,12)}</text>
+                <text y="-${HEX_SIZE + 5}" text-anchor="middle" class="token-label" fill="white" font-weight="bold" font-size="11" style="text-shadow: 0 2px 4px black; letter-spacing: 0.5px;">${escapeHTML(String(t.name || "").substring(0,12))}</text>
             `;
 
             group.onclick = (e) => { 
@@ -1165,7 +1507,7 @@ window.arena = {
                     <img src="${img}" onerror="this.src='${IMG_PLACEHOLDER_BASE64}'">
                     ${isTargetable ? '<div class="absolute inset-0 bg-red-500/20 rounded-full flex items-center justify-center"><i class="fas fa-crosshairs text-white text-xs drop-shadow-md"></i></div>' : ''}
                 </div>
-                <span class="text-[8px] font-bold text-white mt-1 truncate w-full text-center">${token.name.substring(0,6)}</span>
+                <span class="text-[8px] font-bold text-white mt-1 truncate w-full text-center">${escapeHTML(String(token.name || "").substring(0,6))}</span>
             `;
             
             if(isActive) setTimeout(() => card.scrollIntoView({behavior: 'smooth', inline: 'center'}), 100);
@@ -1291,7 +1633,7 @@ window.arena = {
             menu.innerHTML = `
                 <div class="bg-slate-900 p-2 rounded border border-slate-600">
                     <div class="flex justify-between items-center mb-2 border-b border-slate-700 pb-1">
-                        <span class="text-xs font-bold text-emerald-400">${token.name}</span>
+                        <span class="text-xs font-bold text-emerald-400">${escapeHTML(token.name)}</span>
                         <button onclick="window.arena.closeContextMenu()" class="text-slate-500 hover:text-white"><i class="fas fa-times"></i></button>
                     </div>
                     <div class="space-y-1 text-xs">
@@ -1311,7 +1653,7 @@ window.arena = {
 
         menu.innerHTML = `
             <div id="arena-ctx-header" class="flex justify-between items-center bg-slate-900 p-2 border-b border-slate-700">
-                <span class="text-xs font-bold text-amber-500 truncate max-w-[150px]">${token.name}</span>
+                <span class="text-xs font-bold text-amber-500 truncate max-w-[150px]">${escapeHTML(token.name)}</span>
                 <button onclick="window.arena.closeContextMenu()" class="text-slate-400 hover:text-white px-2"><i class="fas fa-times"></i></button>
             </div>
             <div class="p-3 space-y-3 bg-slate-900">
@@ -1434,66 +1776,15 @@ window.arena = {
         }
     },
 
-    // --- FUNÇÕES MATEMÁTICAS UTILITÁRIAS ---
-    
-    getReachableHexes: function(sq, sr, range) {
-        const visited = new Set([`${sq},${sr}`]); 
-        const fringes = [[{q:sq, r:sr}]];
-        
-        for (let k = 1; k <= range; k++) {
-            fringes.push([]);
-            for (const h of fringes[k-1]) {
-                const dirs = [{q:1, r:0}, {q:1, r:-1}, {q:0, r:-1}, {q:-1, r:0}, {q:-1, r:1}, {q:0, r:1}];
-                
-                dirs.forEach(d => {
-                    const nQ = h.q + d.q;
-                    const nR = h.r + d.r;
-                    const nK = `${nQ},${nR}`;
-                    
-                    // Só adiciona se não houver um muro (obstáculo) na coordenada
-                    if (!window.arena.data.obstaculos?.[nK] && !visited.has(nK)) { 
-                        visited.add(nK); 
-                        fringes[k].push({q: nQ, r: nR}); 
-                    }
-                });
-            }
-        }
-        return visited;
-    },
-
-    hexDistance: function(q1, r1, q2, r2) {
-        return (Math.abs(q1 - q2) + Math.abs(q1 + r1 - q2 - r2) + Math.abs(r1 - r2)) / 2;
-    },
-
-    hexToPixel: function(q, r) { 
-        return { 
-            x: HEX_SIZE * (Math.sqrt(3) * q + Math.sqrt(3)/2 * r) + 60, 
-            y: HEX_SIZE * (3/2 * r) + 60 
-        }; 
-    },
-
-    getHexPoints: function(x, y) {
-        let p = ""; 
-        for(let i=0; i<6; i++) { 
-            const rad = Math.PI/180*(60*i-30); 
-            p+=`${x+(HEX_SIZE-1)*Math.cos(rad)},${y+(HEX_SIZE-1)*Math.sin(rad)} `; 
-        } 
-        return p;
-    },
-
-    pixelToHex: function(x, y) {
-        let q = (Math.sqrt(3)/3 * (x - 60) - 1/3 * (y - 60)) / HEX_SIZE;
-        let r = (2/3 * (y - 60)) / HEX_SIZE;
-        return window.arena.hexRound(q, r);
-    },
-
-    hexRound: function(q, r) {
-        let rq = Math.round(q), rr = Math.round(r), rs = Math.round(-q - r);
-        let q_diff = Math.abs(rq - q), r_diff = Math.abs(rr - r), s_diff = Math.abs(rs - (-q - r));
-        if (q_diff > r_diff && q_diff > s_diff) rq = -rr - rs;
-        else if (r_diff > s_diff) rr = -rq - rs;
-        return { q: rq, r: rr };
-    },
+    // --- COMPATIBILIDADE ---
+    // A matematica hexagonal migrou para js/core/hex.js (testavel, sem DOM).
+    // Estes aliases sao mantidos apenas porque partes do projeto e o console
+    // do Mestre ainda chamam window.arena.hexDistance / .hexToPixel.
+    hexDistance: function(q1, r1, q2, r2) { return hexDistance(q1, r1, q2, r2); },
+    hexToPixel: function(q, r) { return hexToPixel(q, r); },
+    pixelToHex: function(x, y) { return pixelToHex(x, y); },
+    hexRound: function(q, r) { return hexRound(q, r); },
+    getHexPoints: function(x, y, size) { return getHexPoints(x, y, size ?? (HEX_SIZE - 1)); },
 
     getSVGPoint: function(e) {
         const svg = document.getElementById('arena-svg');

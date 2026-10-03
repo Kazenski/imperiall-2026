@@ -1,7 +1,7 @@
 import { db, doc, updateDoc, setDoc, deleteDoc, runTransaction, serverTimestamp, storage, ref, uploadBytes, getDownloadURL, deleteObject, collection } from '../core/firebase.js';
 import { globalState, PLACEHOLDER_IMAGE_URL } from '../core/state.js';
 import { escapeHTML } from '../core/utils.js';
-import { calculateMainStats, calculateDynamicAttributes, calculateWeightStats, getFomeDebuffMultiplier } from '../core/calculos.js';
+import { calculateMainStats, calculateDynamicAttributes, calculateWeightStats, getFomeDebuffMultiplier, getXpBracket, resolvePool } from '../core/calculos.js';
 
 // ============================================================================
 // --- TELA 1: LISTAGEM DE PERSONAGENS (COMPÊNDIO) ---
@@ -87,8 +87,8 @@ function renderListaPersonagens(container, filtro) {
                     <img src="${img}" class="w-full h-full object-cover">
                 </div>
                 <div class="flex-grow overflow-hidden">
-                    <h4 class="text-lg font-cinzel font-bold text-white group-hover:text-amber-400 truncate transition-colors">${data.nome || 'Sem Nome'}</h4>
-                    <p class="text-xs text-slate-400 truncate">Jogador: <span class="text-slate-300 font-medium">${data.jogador || 'N/A'}</span></p>
+         <h4 class="text-lg font-cinzel font-bold text-white group-hover:text-amber-400 truncate transition-colors">${escapeHTML(data.nome || 'Sem Nome')}</h4>
+      <p class="text-xs text-slate-400 truncate">Jogador: <span class="text-slate-300 font-medium">${escapeHTML(data.jogador || 'N/A')}</span></p>
                 </div>
             </div>
             <div class="mt-auto flex justify-between items-end border-t border-slate-700/50 pt-2 relative z-0">
@@ -641,10 +641,13 @@ function updateEditorUI(container) {
 
         let total = statBd.base + statBd.equip + statBd.const + tempVal + (statBd.ego || 0);
 
-        let debuffFome = 1;
-        if (globalState.selectedCharacterData && globalState.selectedCharacterData.ficha) {
-            debuffFome = getFomeDebuffMultiplier(globalState.selectedCharacterData.ficha);
-        }
+        // BUG CORRIGIDO: o debuff de fome era lido de
+        // `globalState.selectedCharacterData` (o personagem do seletor do
+        // topo). Esta tela também é aberta pelo admin para QUALQUER
+        // personagem — então editar a ficha do personagem B com o A
+        // selecionado mostrava a fome do A nos ATK/DEF/EVA do B.
+        // Agora usa a ficha que esta tela está de fato editando.
+        const debuffFome = getFomeDebuffMultiplier(originalFicha);
         total = Math.floor(total * debuffFome);
 
         const displayTotalEl = container.querySelector(`#display-total-${stat}`);
@@ -664,49 +667,42 @@ function updateEditorUI(container) {
         if (btnMenos) { btnMenos.disabled = (tempVal <= 0); btnMenos.classList.toggle('opacity-50', tempVal <= 0); }
     });
 
+    // USA O HELPER COMUM (getXpBracket).
+    //
+    // BUG CORRIGIDO (off-by-one): este bloco fazia uma busca ASCENDENTE
+    // ("se xp < requisito do nível N, então sou o nível N"). Como
+    // `experienciaParaProximoNivel` é o XP ACUMULADO para atingir o nível,
+    // o primeiro nível cujo requisito é maior que o XP atual é o nível
+    // DEPOIS do que o jogador está — então a barra sempre mostrava um nível
+    // a mais do que todos os outros cálculos usavam.
+    // Ex.: tabela 1→0, 2→100, 3→300; com 150 XP a barra dizia "Nvl 3",
+    // enquanto calculateLevelFromXP dizia 2.
+    //
+    // getXpBracket também elimina a divisão por zero quando dois níveis
+    // consecutivos têm o mesmo requisito (tabela degenerada).
     const xpInput = container.querySelector('#editor-experiencia');
     const currentXp = Number(xpInput.value) || 0;
-    const tabela = globalState.cache.tabela_xp;
 
-    if (tabela && tabela.niveis) {
-        const levels = Object.keys(tabela.niveis).map(Number).sort((a, b) => a - b);
-        let currentLevel = 1;
-        let xpFloor = 0;
-        let xpCeiling = 1000;
-        let isMaxLevel = false;
-
-        for (let i = 0; i < levels.length; i++) {
-            const lvl = levels[i];
-            const reqProximo = tabela.niveis[lvl].experienciaParaProximoNivel;
-
-            if (currentXp < reqProximo) {
-                currentLevel = lvl;
-                xpFloor = (i === 0) ? 0 : tabela.niveis[levels[i - 1]].experienciaParaProximoNivel;
-                xpCeiling = reqProximo;
-                break;
-            }
-
-            if (i === levels.length - 1) {
-                currentLevel = lvl;
-                isMaxLevel = true;
-            }
-        }
+    if (globalState.cache.tabela_xp?.niveis) {
+        const bracket = getXpBracket(currentXp);
 
         const xpTextElement = container.querySelector('#xp-bar-text');
         const xpFillElement = container.querySelector('#xp-bar-fill');
         const xpContainer = container.querySelector('#xp-bar-container');
 
-        if (isMaxLevel) {
-            if (xpTextElement) xpTextElement.textContent = `Nível ${currentLevel} (Máx)`;
+        if (bracket.isMaxLevel) {
+            if (xpTextElement) xpTextElement.textContent = `Nível ${bracket.level} (Máx)`;
             if (xpFillElement) xpFillElement.style.width = "100%";
+            if (xpContainer) xpContainer.title = `XP Atual: ${currentXp} — nível máximo alcançado.`;
         } else {
-            const xpRelativo = currentXp - xpFloor;
-            const xpNecessario = xpCeiling - xpFloor;
-            const pct = Math.min(100, Math.max(0, (xpRelativo / xpNecessario) * 100));
+            const xpRelativo = currentXp - bracket.floor;
+            const xpNecessario = Math.max(1, bracket.ceiling - bracket.floor);
 
-            if (xpTextElement) xpTextElement.textContent = `Nvl ${currentLevel} - ${Math.floor(pct)}%`;
-            if (xpFillElement) xpFillElement.style.width = `${pct}%`;
-            if (xpContainer) xpContainer.title = `XP Atual: ${currentXp}\nProgresso do Nível: ${xpRelativo} / ${xpNecessario}`;
+            if (xpTextElement) xpTextElement.textContent = `Nvl ${bracket.level} - ${Math.floor(bracket.pct)}%`;
+            if (xpFillElement) xpFillElement.style.width = `${bracket.pct}%`;
+            if (xpContainer) {
+                xpContainer.title = `XP Atual: ${currentXp}\nProgresso do Nível: ${xpRelativo} / ${xpNecessario}`;
+            }
         }
     }
 }
@@ -1036,13 +1032,30 @@ function renderObjectivesManager(ficha) {
             html += `
                 <div class="objective-card ${borderClass} relative group bg-slate-900/40 transition-colors">
                     <div class="absolute top-2 right-2 flex gap-2 opacity-100 transition-opacity z-10 bg-slate-800/80 px-2 py-1 rounded backdrop-blur">
-                         <button onclick="window.editObjective('${obj.id}', '${escapeHTML(obj.text)}')" class="text-slate-400 hover:text-sky-400 transition-colors" title="Editar Texto">
+                         <!--
+  XSS CORRIGIDO: usava onclick="...('${escapeHTML(obj.text)}')".
+  escapeHTML() transforma ' em &#039;, mas o parser HTML decodifica o
+  valor do atributo ANTES de o JS ser avaliado — devolvendo a aspa e
+  reabrindo o breakout. O texto do objetivo é digitado pelo jogador,
+  então isso era XSS armazenado. Agora o texto vai por dataset
+  (atributo escapado pelo próprio DOM), e o handler é delegated.
+-->
+<!--
+        XSS CORRIGIDO: era onclick="...('${escapeHTML(obj.text)}')".
+        escapeHTML() vira ' em &#039;, mas o parser HTML decodifica o
+        valor do atributo ANTES de o JS ser avaliado — devolvendo a aspa e
+        reabrindo o breakout. O texto do objetivo e digitado pelo jogador,
+        entao isso era XSS armazenado. Agora o texto viaja por data-*
+        (escapado pelo proprio DOM) e o handler e delegated.
+      -->
+      <button data-obj-edit="${obj.id}" data-obj-text="${escapeHTML(obj.text)}"
+              class="text-slate-400 hover:text-sky-400 transition-colors" title="Editar Texto">
                             <i class="fas fa-pen text-[10px]"></i>
                         </button>
-                        <button onclick="window.deleteObjective('${obj.id}')" class="text-slate-400 hover:text-red-500 transition-colors" title="Excluir (Limpar da lista)">
+                        <button data-obj-delete="${obj.id}" class="text-slate-400 hover:text-red-500 transition-colors" title="Excluir (Limpar da lista)">
                             <i class="fas fa-trash text-[10px]"></i>
                         </button>
-                        ${isMaster ? `<button onclick="window.toggleObjAdminHide('${obj.id}')" class="text-slate-400 hover:text-purple-400 transition-colors" title="Admin: Ocultar/Banir"><i class="fas ${obj.adminHidden ? 'fa-eye' : 'fa-ban'} text-[10px]"></i></button>` : ''}
+                        ${isMaster ? `<button data-obj-hide="${obj.id}" class="text-slate-400 hover:text-purple-400 transition-colors" title="Admin: Ocultar/Banir"><i class="fas ${obj.adminHidden ? 'fa-eye' : 'fa-ban'} text-[10px]"></i></button>` : ''}
                     </div>
 
                     ${isCompleted ? '<div class="absolute top-4 right-4 text-amber-500/10 text-6xl drop-shadow-md z-0 pointer-events-none"><i class="fas fa-medal"></i></div>' : ''}
@@ -1067,11 +1080,27 @@ function renderObjectivesManager(ficha) {
         <div class="bg-black/30 rounded-lg border border-slate-700 p-4 shadow-inner">
             <h4 class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3"><i class="fas fa-history mr-1"></i> Histórico de Conquistas</h4>
             <div class="max-h-40 overflow-y-auto custom-scroll space-y-1.5 text-xs font-mono text-slate-400 pr-2">
-                ${logs.length > 0 ? logs.map(l => `<div class="border-b border-slate-800/50 pb-1"><span class="text-slate-600 font-bold mr-2">[${l.date}]</span> ${l.text}</div>`).join('') : '<span class="italic opacity-50">Nenhum registro no diário.</span>'}
+                ${logs.length > 0 ? logs.map(l => `<div class="border-b border-slate-800/50 pb-1"><span class="text-slate-600 font-bold mr-2">[${escapeHTML(l.date)}]</span> ${escapeHTML(l.text)}</div>`).join('') : '<span class="italic opacity-50">Nenhum registro no diário.</span>'}
             </div>
         </div>
     `;
     container.innerHTML = html;
+
+    // Handlers delegated dos botões de objetivo (ver nota de XSS acima).
+    // Ligados uma única vez por container.
+    if (!container.dataset.objBound) {
+        container.dataset.objBound = '1';
+        container.addEventListener('click', (e) => {
+            const edit = e.target.closest('[data-obj-edit]');
+            if (edit) return window.editObjective(edit.dataset.objEdit, edit.dataset.objText || '');
+
+            const del = e.target.closest('[data-obj-delete]');
+            if (del) return window.deleteObjective(del.dataset.objDelete);
+
+            const hide = e.target.closest('[data-obj-hide]');
+            if (hide) return window.toggleObjAdminHide(hide.dataset.objHide);
+        });
+    }
 }
 
 window.addNewObjective = async function () {

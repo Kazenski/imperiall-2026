@@ -1,0 +1,244 @@
+rules_version = '2';
+
+// ===========================================================================
+// SECURITY RULES — Imperiall 2026
+// ===========================================================================
+//
+// ESTE ARQUIVO É A BARREIRA DE SEGURANÇA REAL DO PROJETO.
+//
+// O código do cliente (js/) roda no navegador do usuário e pode ser
+// contornado pelo console. Qualquer validação feita só lá — preço de compra,
+// cálculo de dano, verificação de "é admin?" — é apenas conveniência de UX.
+// A autoridade está aqui.
+//
+// -----------------------------------------------------------------------
+// ANTES DE FAZER DEPLOY
+// -----------------------------------------------------------------------
+// 1. Revise cada `match` contra o que o seu app realmente faz.
+// 2. Teste em ambiente de teste antes de aplicar em produção.
+// 3. Publique com:  firebase deploy --only firestore:rules
+//
+// Se você aplicar estas regras e algo quebrar, o log do console do navegador
+// mostra exatamente qual caminho foi negado. A forma de診 corrigir é ajustar a
+// regra, nunca afrouxar para `allow read, write: if true`.
+//
+// -----------------------------------------------------------------------
+// MAPA DE COLEÇÕES
+// -----------------------------------------------------------------------
+// Jogador (escrita parcial do próprio personagem):
+//   rpg_fichas, rpg_sessoes, coleções, pets, habilidades, armas espirituais
+//
+// Sessões de mesa (todos os jogadores da mesa leem; o dono/admin escreve):
+//   rpg_sessions
+//
+// Mestres (escrita em dados do mundo):
+//   rpg_Npcs, rpg_NpcConexoes, rpg_locations, rpg_routes, rpg_events,
+//   rpg_seasons, rpg_world_state, rpg_dungeons, rpg_fichasNPCMonstros
+//
+// Admin apenas:
+//   rpg_users (exceto o próprio documento, e mesmo assim somente campos
+//   seguros), rpg_lojas, rpg_shop_tiers, rpg_item_tiers, rpg_racas,
+//   rpg_classes, rpg_subclasses, rpg_habilidades, rpg_profissoes,
+//   rpg_efeitosGerais, rpg_itemTipos, rpg_itensCraftados, rpg_armasEspirituais,
+//   rpg_habilidadesEspirito, rpg_pets, rpg_habilidadesPet,
+//   rpg_estabelecimentos_templates, rpg_aliados_templates,
+//   rpg_itensCadastrados, rpg_itensMochila, rpg_balanceamento_itens_precos_geral,
+//   setsEspeciais, rpg_constelacoes_templates, rpg_configuracoes,
+//   rpg_tabelaXpEspirito, rpg_tabelaXpPet, rpg_noticias, rpg_atributos,
+//   rpg_terrenosBonus, rpg_vantagensHabilidadesNaturais, rpg_efeitoTipos
+//
+// Mundo (somente leitura para autenticados):
+//   demais coleções de conteúdo público
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // FUNÇÕES AUXILIARES
+    // =========================================================================
+
+    // Está autenticado?
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // O usuário logado é o administrador (por e-mail)?
+    function isAdminEmail() {
+      return isSignedIn()
+        && request.auth.token.email == 'kazenski.developer@gmail.com';
+    }
+
+    // Papel declarado no documento do próprio usuário.
+    function myRole() {
+      return get(/databases/$(database)/documents/rpg_users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (isAdminEmail() || myRole() == 'admin');
+    }
+
+    function isMaster() {
+      return isSignedIn() && (isAdminEmail() || myRole() == 'mestre' || myRole() == 'admin');
+    }
+
+    // O documento pertence ao usuário logado?
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // O usuário é dono desta ficha de personagem?
+    function ownsThisFicha() {
+      return isSignedIn() && resource.data.jogadorUid == request.auth.uid;
+    }
+
+    // Diff de campos: retorna true se `mudou` estiver em `request.resource.data`
+    // mas não em `resource.data`.
+    function changed(alvo, campo) {
+      return request.resource.data[alvo].diff(resource.data[alvo]).affectedKeys().has(campo);
+    }
+
+    // Salvou exatamente estes campos (nada mais)?
+    function onlyFields(lista) {
+      return request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(lista);
+    }
+
+    // Escreveu apenas neste conjunto de caminhos
+    function writesOnly(caminhos) {
+      return request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(caminhos);
+    }
+
+    // =========================================================================
+    // USUÁRIOS
+    // =========================================================================
+    // O usuário lê e escreve o próprio registro, mas NÃO pode se promover:
+    // `role` e `criadoEm` ficam fora da lista de campos graváveis.
+    // Isto fecha a escalada de privilégio via
+    //   updateDoc(rpg_users/{meuUid}, {role:'admin'})
+    match /rpg_users/{uid} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow create: if isOwner(uid)
+                    && request.resource.data.role == 'jogador'
+                    && onlyFields(['email', 'role', 'criadoEm']);
+      allow update: if isAdmin()
+                    || (isOwner(uid)
+                        && request.resource.data.role == resource.data.role
+                        && onlyFields(['email', 'nome', 'avatarUrl', 'ultimoAcesso']));
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // FICHAS DE PERSONAGEM
+    // =========================================================================
+    // O jogador controla a própria ficha. Ponto crítico: `mochila` NÃO pode
+    // ser escrito livremente, senão qualquer usuário edita a própria carteira
+    // (`updateDoc(rpg_fichas/id, {'mochila.<coinId>': 1e12})`).
+    //
+    // Compras, vendas e câmbios passam por Cloud Functions verificadas
+    // (ver README.md, seção "Economia autoritativa"). Até que existam,
+    //o campo mochila fica somente-leitura para o jogador.
+    match /rpg_fichas/{charId} {
+      allow read: if isSignedIn();
+      allow create: if isOwner(charId) || isMaster();
+      allow update: if isMaster()
+                    || (ownsThisFicha() && !changed('mochila', 'mochila'));
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // SESSÕES DE MESA
+    // =========================================================================
+    // Participantes leem; o dono e o admin escrevem (incluindo arena_state).
+    match /rpg_sessions/{sessaoId} {
+      function isParticipant() {
+        return isSignedIn() && (
+          resource.data.playerIds != null
+          && request.auth.uid in resource.data.playerIds
+        );
+      }
+      allow read: if isParticipant() || isMaster();
+      allow create: if isSignedIn();
+      allow update: if isMaster();
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // DADOS DO MUNDO (mestre escreve, autenticados leem)
+    // =========================================================================
+    match /rpg_Npcs/{docId}               { allow read: if isSignedIn(); allow write: if isMaster(); }
+    match /rpg_NpcConexoes/{docId}        { allow read: if isSignedIn(); allow write: if isMaster(); }
+    match /rpg_locations/{docId}          { allow read: if isSignedIn(); allow write: if isMaster(); }
+    match /rpg_routes/{docId}             { allow read: if isSignedIn(); allow write: if isMaster(); }
+    match /rpg_events/{docId}             { allow read: if isSignedIn(); allow write: if isMaster(); }
+    match /rpg_seasons/{docId}            { allow read: if isSignedIn(); allow write: if isMaster(); }
+    match /rpg_world_state/{docId}        { allow read: if isSignedIn(); allow write: if isMaster(); }
+    match /rpg_dungeons/{docId}           { allow read: if isSignedIn(); allow write: if isMaster(); }
+    match /rpg_fichasNPCMonstros/{docId}  { allow read: if isSignedIn(); allow write: if isMaster(); }
+
+    // =========================================================================
+    // ECONOMIA
+    // =========================================================================
+    match /rpg_lojas/{lojaId} {
+      allow read: if isSignedIn();
+      // Estoque muda durante a compra, e a compra é feita pelo cliente.
+      // Por isso o preço NÃO pode ser alterado por aqui: o preço é autoritativo
+      // no documento e a Cloud Function valida. Este match permite apenas
+      // Campos operacionais; preço e caixa são de escrita restrita.
+      allow update: if isAdmin();
+      allow create, delete: if isAdmin();
+    }
+    match /rpg_shop_tiers/{docId}         { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_item_tiers/{docId}         { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_balanceamento_itens_precos_geral/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+    match /rpg_itensCadastrados/{docId}   { allow read: if isSignedIn(); allow write: if isMaster(); }
+    match /rpg_itensMochila/{docId}       { allow read: if isSignedIn(); allow write: if isMaster(); }
+
+    // =========================================================================
+    // REGRAS DE JOGO E CONTEÚDO (somente admin escreve)
+    // =========================================================================
+    match /rpg_racas/{docId}              { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_classes/{docId}            { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_subclasses/{docId}         { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_habilidades/{docId}        { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_profissoes/{docId}         { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_efeitosGerais/{docId}      { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_efeitoTipos/{docId}        { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_itemTipos/{docId}          { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_itensCraftados/{docId}     { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_armasEspirituais/{docId}   { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_habilidadesEspirito/{docId}{ allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_pets/{docId}               { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_habilidadesPet/{docId}     { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_atributos/{docId}          { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_terrenosBonus/{docId}      { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_vantagensHabilidadesNaturais/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_estabelecimentos_templates/{docId}    { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_aliados_templates/{docId}             { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_constelacoes_templates/{docId}        { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_configuracoes/{docId}       { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_tabelaXpEspirito/{docId}    { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_tabelaXpPet/{docId}         { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /setsEspeciais/{docId}           { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /rpg_noticias/{docId}           { allow read: if isSignedIn(); allow write: if isAdmin(); }
+
+    // =========================================================================
+    // COLECÕES DE MONSTROS / BACKUPS
+    // =========================================================================
+    match /rpg_colecao_itens/{docId}      { allow read: if isSignedIn(); allow write: if isMaster(); }
+    match /rpg_backups/{docId}            { allow read: if isAdmin(); allow write: if isAdmin(); }
+    match /{collectionName}/{docId} {
+      // Trava de segurança: qualquer coleção que NÃO foi explicitamente
+      // listada acima fica somente-leitura para autenticados e
+      // completamente fechada para escrita.
+      //
+      // Ao criar uma coleção nova, adicione um `match` explícito acima em vez
+      // de afrouxar esta regra.
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+  }
+}
